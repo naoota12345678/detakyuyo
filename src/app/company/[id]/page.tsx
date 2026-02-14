@@ -1429,6 +1429,47 @@ function CompanyPageContent() {
                         {dcResult.newInExcel.length > 0 && (
                           <span className="text-blue-600">アプリに無い: {dcResult.newInExcel.length}名</span>
                         )}
+                        <button
+                          onClick={async () => {
+                            const rows: Record<string, string | number>[] = [];
+                            for (const r of dcResult.results) {
+                              for (const ck of r.checks) {
+                                if (ck.status === "ok") continue;
+                                rows.push({
+                                  "社員番号": r.employeeNumber,
+                                  "氏名": r.name,
+                                  "項目": ck.fieldLabel,
+                                  "ステータス": ck.status === "mismatch" ? "不一致" : ck.status === "changed" ? "変動" : ck.status === "warning" ? "警告" : ck.status,
+                                  "Excel値": ck.excelValue ?? "",
+                                  "アプリ値": ck.appValue ?? "",
+                                  "前月値": ck.prevMonthValue ?? "",
+                                  "メッセージ": ck.message,
+                                });
+                              }
+                            }
+                            for (const name of dcResult.missing) {
+                              rows.push({ "社員番号": "", "氏名": name, "項目": "", "ステータス": "Excelに無い", "Excel値": "", "アプリ値": "", "前月値": "", "メッセージ": "アプリにのみ存在" });
+                            }
+                            for (const name of dcResult.newInExcel) {
+                              rows.push({ "社員番号": "", "氏名": name, "項目": "", "ステータス": "アプリに無い", "Excel値": "", "アプリ値": "", "前月値": "", "メッセージ": "Excelにのみ存在" });
+                            }
+                            if (rows.length === 0) { alert("差分データがありません"); return; }
+                            const XLSX_EXPORT = await import("xlsx");
+                            const ws = XLSX_EXPORT.utils.json_to_sheet(rows);
+                            // Auto column width
+                            const colWidths = Object.keys(rows[0]).map((key) => {
+                              const maxLen = Math.max(key.length, ...rows.map((r) => String(r[key] ?? "").length));
+                              return { wch: Math.min(maxLen + 2, 30) };
+                            });
+                            ws["!cols"] = colWidths;
+                            const wb = XLSX_EXPORT.utils.book_new();
+                            XLSX_EXPORT.utils.book_append_sheet(wb, ws, "差分チェック");
+                            XLSX_EXPORT.writeFile(wb, `データチェック_${company?.name || ""}_${dcResult.month}.xlsx`);
+                          }}
+                          className="ml-auto shrink-0 rounded border border-teal-300 bg-white px-2 py-0.5 text-[11px] text-teal-700 hover:bg-teal-50"
+                        >
+                          Excelに出力
+                        </button>
                       </div>
 
                       {/* 所属一括反映ボタン */}
