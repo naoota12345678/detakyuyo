@@ -165,6 +165,7 @@ function CompanyPageContent() {
     employeeName?: string;
     changes?: { field: string; value: number | string; months: string[]; mode?: "set" | "append" }[];
     summary?: string;
+    answer?: string;
     error?: string;
   } | null>(null);
   const [aiApplying, setAiApplying] = useState(false);
@@ -1060,7 +1061,17 @@ function CompanyPageContent() {
               {/* AI結果表示 */}
               {aiResult && (
                 <div className="mt-3">
-                  {aiResult.success ? (
+                  {aiResult.success && aiResult.answer ? (
+                    <div className="rounded-md border border-purple-200 bg-purple-50 p-3">
+                      <p className="text-sm text-purple-800 whitespace-pre-wrap">{aiResult.answer}</p>
+                      <button
+                        onClick={() => setAiResult(null)}
+                        className="mt-2 text-xs text-zinc-400 hover:text-zinc-600"
+                      >
+                        閉じる
+                      </button>
+                    </div>
+                  ) : aiResult.success ? (
                     <div className="rounded-md border border-green-200 bg-green-50 p-3">
                       <p className="text-sm font-medium text-green-800 mb-2">{aiResult.summary}</p>
                       <div className="space-y-1">

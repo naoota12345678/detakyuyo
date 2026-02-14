@@ -5,7 +5,8 @@ import * as XLSX from "xlsx";
 
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
-function buildEmployeeContext(docs: FirebaseFirestore.QueryDocumentSnapshot[], month: string): string {
+function buildEmployeeContext(docs: FirebaseFirestore.QueryDocumentSnapshot[], month: string): { payroll: string; roster: string } {
+  // 当月の給与データ
   const byName = new Map<string, Record<string, unknown>>();
   for (const doc of docs) {
     const d = doc.data();
@@ -28,14 +29,41 @@ function buildEmployeeContext(docs: FirebaseFirestore.QueryDocumentSnapshot[], m
       socialInsuranceGrade: d.socialInsuranceGrade || "",
     });
   }
-  if (byName.size === 0) return "（当月のアプリデータなし）";
-  const lines = Array.from(byName.entries()).map(
+  const payroll = byName.size === 0 ? "（当月のアプリデータなし）" : Array.from(byName.entries()).map(
     ([name, d]) => {
       const r = d as Record<string, unknown>;
       return `${name}(${r.employeeNumber}): 基本給${r.baseSalary}, 通勤${r.commutingAllowance}, 交通費単価${r.commutingUnitPrice}, みなし${r.deemedOvertimePay}, 住民税${r.residentTax}, 賞与${r.bonus}, 単価${r.unitPrice}`;
     }
-  );
-  return lines.join("\n");
+  ).join("\n");
+
+  // 全従業員の在籍情報（最新月のデータから取得）
+  const empInfo = new Map<string, { status: string; hireDate: string; leaveDate: string; employmentType: string; branchName: string; employeeNumber: string }>();
+  for (const doc of docs) {
+    const d = doc.data();
+    const name = d.name as string;
+    if (!empInfo.has(name) || (d.month > (empInfo.get(name) as { status: string }).status)) {
+      empInfo.set(name, {
+        status: d.status || "在籍",
+        hireDate: d.hireDate || "",
+        leaveDate: d.leaveDate || "",
+        employmentType: d.employmentType || "",
+        branchName: d.branchName || "",
+        employeeNumber: d.employeeNumber || "",
+      });
+    }
+  }
+  const rosterLines: string[] = [];
+  for (const [name, info] of empInfo) {
+    const parts = [`${name}(${info.employeeNumber}): ${info.status}`];
+    if (info.employmentType) parts.push(info.employmentType);
+    if (info.branchName) parts.push(info.branchName);
+    if (info.hireDate) parts.push(`入社${info.hireDate}`);
+    if (info.leaveDate) parts.push(`退社日${info.leaveDate}`);
+    rosterLines.push(parts.join(", "));
+  }
+  const roster = rosterLines.length === 0 ? "（従業員データなし）" : rosterLines.join("\n");
+
+  return { payroll, roster };
 }
 
 export async function POST(request: NextRequest) {
@@ -57,7 +85,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Fetch app data for context
-    let employeeContext = "";
+    let employeeContext = { payroll: "", roster: "" };
     if (companyName && month) {
       const aliasDoc = await adminDb.collection("appSettings").doc("companyAliases").get();
       const aliasMappings: Record<string, string> = aliasDoc.exists
@@ -210,8 +238,11 @@ export async function POST(request: NextRequest) {
 ## 現在の会社: ${companyName || "不明"}
 ## 対象月: ${month || "不明"}
 
-## アプリ内の当月データ
-${employeeContext}
+## 従業員名簿（在籍状況・入退社日）
+${employeeContext.roster}
+
+## アプリ内の当月給与データ
+${employeeContext.payroll}
 
 ## ルール
 - **数値の正確性が最重要**: 資料に記載された数値をそのまま正確に転記してください
@@ -222,6 +253,7 @@ ${employeeContext}
 - 金額の不一致や差分があれば明確に指摘してください
 - 回答は日本語で簡潔に
 - ユーザーが「反映して」「転記して」と指示したら、指示された全フィールド・全従業員分のchangesブロックを出力してください。一部省略は禁止
+- 従業員の在籍・退社について聞かれたら、上記の従業員名簿を参照して回答してください
 
 ## データ反映の方法
 データを反映する場合は、回答の最後に以下の形式でJSONブロックを出力してください。

@@ -73,6 +73,7 @@ ${fieldList}
 - employeeMemo（人メモ）: 「追加」「追記」「書いて」等の場合は mode を "append" にする。既存メモがある場合、改行して追記するテキストだけを value に入れる
 - employeeMemo の mode が "set" の場合は既存メモを完全に置き換える
 - memo（月メモ）も同様に "append" / "set" を使い分ける
+- 質問（「○○さん辞めた？」「在籍してる？」等）の場合は従業員一覧から情報を探して回答する
 
 ## 出力形式
 必ず以下のJSON形式のみで応答してください。マークダウンのコードブロックは使わないでください。
@@ -90,6 +91,13 @@ ${fieldList}
 {
   "success": false,
   "error": "エラーメッセージ（日本語）"
+}
+
+質問への回答（変更操作ではない場合）:
+{
+  "success": true,
+  "answer": "回答テキスト（日本語）",
+  "summary": "質問への回答"
 }`;
 
     const message = await client.messages.create({
