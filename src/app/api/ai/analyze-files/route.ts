@@ -148,10 +148,11 @@ export async function POST(request: NextRequest) {
     const systemPrompt = `あなたは給与管理アプリに組み込まれたAIアシスタントです。
 ユーザーがアップロードした資料を分析し、指示に従って回答してください。
 
-**重要: あなたはアプリの一部です。** ユーザーが「反映して」「転記して」「更新して」と言った場合、
-下記の \`\`\`changes\`\`\` ブロックを出力すれば、アプリが自動的にデータを更新します。
-「できません」「手動で行ってください」等の回答は絶対にしないでください。
-changesブロックを出力することがデータ反映の方法です。
+**重要: あなたはアプリの一部です。**
+- ユーザーが「反映して」「転記して」「更新して」と言った場合、\`\`\`changes\`\`\` ブロックを出力してください
+- changesブロックはシステムが自動処理します。ユーザーへの説明は不要です
+- 「できません」「手動で」「ボタンをクリック」等の説明は絶対に書かないでください
+- changesブロックの前後に「以下のJSONで〜」等の説明文も不要です。分析結果だけ書いてください
 
 ## 現在の会社: ${companyName || "不明"}
 ## 対象月: ${month || "不明"}
@@ -167,8 +168,8 @@ ${employeeContext}
 - ユーザーが「反映して」「転記して」と指示したら、必ず \`\`\`changes\`\`\` ブロックを出力してください
 
 ## データ反映の方法
-資料から読み取ったデータをアプリに反映するには、回答の最後に以下の形式でJSONブロックを出力してください。
-このブロックを出力すると、アプリのUI上に「反映する」ボタンが表示され、ユーザーがワンクリックでデータを更新できます。
+データを反映する場合は、回答の最後に以下の形式でJSONブロックを出力してください。
+ブロックはシステムが自動処理するので、ブロックについての説明文は書かないでください。
 
 \`\`\`changes
 [
@@ -210,7 +211,7 @@ ${employeeContext}
 
     const message = await client.messages.create({
       model: "claude-sonnet-4-5-20250929",
-      max_tokens: 4096,
+      max_tokens: 16384,
       system: systemPrompt,
       messages,
     });
@@ -220,13 +221,45 @@ ${employeeContext}
     // Extract structured changes from ```changes ... ``` block
     let changes: { employeeName: string; field: string; value: number | string; months: string[] }[] | undefined;
     let analysisText = text;
-    const changesMatch = text.match(/```changes\s*\n([\s\S]*?)\n```/);
+
+    // Try multiple regex patterns (handles variations in formatting)
+    const changesMatch = text.match(/```changes\s*\n?([\s\S]*?)\n?```/)
+      || text.match(/```changes\s*\n?([\s\S]*)\n?```/);
     if (changesMatch) {
       try {
-        changes = JSON.parse(changesMatch[1]);
-        analysisText = text.replace(/```changes\s*\n[\s\S]*?\n```/, "").trim();
+        changes = JSON.parse(changesMatch[1].trim());
+        analysisText = text.replace(/```changes[\s\S]*?```/, "").trim();
       } catch {
-        // JSON parse failed — keep as plain text
+        // JSON parse failed — try to find JSON array in the block
+        const arrayMatch = changesMatch[1].match(/\[[\s\S]*\]/);
+        if (arrayMatch) {
+          try {
+            changes = JSON.parse(arrayMatch[0]);
+            analysisText = text.replace(/```changes[\s\S]*?```/, "").trim();
+          } catch { /* give up */ }
+        }
+      }
+    } else {
+      // Fallback: closing ``` might be missing (truncated output)
+      const openMatch = text.match(/```changes\s*\n?([\s\S]*)/);
+      if (openMatch) {
+        const arrayMatch = openMatch[1].match(/\[[\s\S]*\]/);
+        if (arrayMatch) {
+          try {
+            changes = JSON.parse(arrayMatch[0]);
+            analysisText = text.replace(/```changes[\s\S]*/, "").trim();
+          } catch {
+            // Try fixing truncated JSON: find last complete object and close the array
+            const lastCompleteObj = arrayMatch[0].lastIndexOf("}");
+            if (lastCompleteObj > 0) {
+              const fixedJson = arrayMatch[0].substring(0, lastCompleteObj + 1) + "]";
+              try {
+                changes = JSON.parse(fixedJson);
+                analysisText = text.replace(/```changes[\s\S]*/, "").trim();
+              } catch { /* give up */ }
+            }
+          }
+        }
       }
     }
 
