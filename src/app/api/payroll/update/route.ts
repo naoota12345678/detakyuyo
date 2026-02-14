@@ -29,6 +29,8 @@ const ALLOWED_FIELDS = [
   "socialInsuranceGrade",
   "unitPrice",
   "commutingType",
+  "bonus",
+  "events",
 ];
 
 export async function POST(request: NextRequest) {

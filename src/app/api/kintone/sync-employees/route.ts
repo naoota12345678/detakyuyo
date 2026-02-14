@@ -55,6 +55,7 @@ function buildPayrollDoc(emp: EmployeeData, month: string) {
     residentTax: 0,
     socialInsuranceGrade: "",
     unitPrice: 0,
+    bonus: 0,
     memo: "",
     employeeMemo: "",
     confirmed: false,
@@ -90,12 +91,13 @@ export async function POST() {
       }
     });
 
-    // kintone から在籍者を取得
+    // kintone から在籍者 + 退社日が今日以降の退社予定者を取得
+    const today = new Date().toISOString().split("T")[0];
     const records = await fetchAllRecords(
       appId,
       token,
       EMPLOYEE_FIELD_CODES,
-      '在籍状況 in ("在籍")'
+      `在籍状況 in ("在籍") or 退社日 >= "${today}"`
     );
 
     // 既存の当月レコードを取得

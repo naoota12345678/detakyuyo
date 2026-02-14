@@ -21,6 +21,7 @@ type EmployeeImport = {
   deemedOvertimePay?: number;
   residentTax?: number;
   unitPrice?: number;
+  bonus?: number;
   memo?: string;
 };
 
@@ -29,7 +30,7 @@ const IMPORT_FIELDS = [
   "allowance1", "allowance1Name", "allowance2", "allowance2Name",
   "allowance3", "allowance3Name", "allowance4", "allowance4Name",
   "allowance5", "allowance5Name", "allowance6", "allowance6Name",
-  "deemedOvertimePay", "residentTax", "unitPrice", "memo",
+  "deemedOvertimePay", "residentTax", "unitPrice", "bonus", "memo",
 ] as const;
 
 export async function POST(request: NextRequest) {
@@ -136,6 +137,7 @@ export async function POST(request: NextRequest) {
         deemedOvertimePay: 0,
         residentTax: 0,
         unitPrice: 0,
+        bonus: 0,
         memo: "",
         confirmed: false,
         events: [],

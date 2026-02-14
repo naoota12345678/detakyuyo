@@ -141,6 +141,7 @@ export async function POST(request: NextRequest) {
         residentTax: prev.residentTax || 0,
         socialInsuranceGrade: prev.socialInsuranceGrade || "",
         unitPrice: prev.unitPrice || 0,
+        bonus: 0, // 賞与は翌月に引き継がない
         socialInsurance: prev.socialInsurance,
         employmentInsurance: prev.employmentInsurance,
         healthStandardMonthly: prev.healthStandardMonthly || "",

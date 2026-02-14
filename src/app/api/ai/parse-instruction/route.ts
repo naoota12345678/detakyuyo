@@ -17,6 +17,7 @@ const FIELD_MAP: Record<string, string> = {
   socialInsuranceGrade: "社保等級",
   overtimeHours: "残業時間",
   overtimePay: "残業代",
+  bonus: "賞与（ボーナス）",
   employeeMemo: "人メモ（従業員メモ、名前の下に表示される個人メモ）",
   memo: "月メモ（月ごとのメモ）",
 };

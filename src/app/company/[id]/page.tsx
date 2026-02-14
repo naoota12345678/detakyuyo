@@ -4,7 +4,7 @@ import { useAuth } from "@/lib/auth-context";
 import { useRouter, useParams } from "next/navigation";
 import { useEffect, useState, useCallback, useRef, Suspense } from "react";
 import { db } from "@/lib/firebase";
-import { collection, getDocs, doc, getDoc, query, where, orderBy } from "firebase/firestore";
+import { collection, getDocs, doc, getDoc, query, where, orderBy, updateDoc } from "firebase/firestore";
 
 // ========================================
 // Types
@@ -34,11 +34,15 @@ type MonthlyData = {
   allowance6: number;
   allowance6Name: string;
   deemedOvertimePay: number;
+  commutingUnitPrice: number;
   commutingType: string; // "月額" or "日額"
+  department: string;
   employeeMemo: string;
+  conversionDate: string;
   residentTax: number;
   socialInsuranceGrade: string;
   unitPrice: number;
+  bonus: number;
 };
 
 type EmployeeRow = {
@@ -130,7 +134,7 @@ function totalAllowances(data: MonthlyData): number {
 function calcUnitPrice(data: MonthlyData, swh: number): number {
   if (data.unitPrice) return data.unitPrice;
   if (swh <= 0) return 0;
-  return Math.round((data.baseSalary + totalAllowances(data)) / swh);
+  return Math.round((data.baseSalary + totalAllowances(data)) / swh * 100) / 100;
 }
 
 // ========================================
@@ -149,7 +153,10 @@ function CompanyPageContent() {
   const [detailEmployee, setDetailEmployee] = useState<EmployeeRow | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("employeeNumber");
   const [completing, setCompleting] = useState(false);
+  const [bonusMonth, setBonusMonth] = useState<string | null>(null);
   const [slackMessages, setSlackMessages] = useState<SlackMessage[]>([]);
+  const [slackOpen, setSlackOpen] = useState(true);
+  const [slackShowProcessed, setSlackShowProcessed] = useState(false);
   // AI指示
   const [aiInstruction, setAiInstruction] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
@@ -161,6 +168,41 @@ function CompanyPageContent() {
     error?: string;
   } | null>(null);
   const [aiApplying, setAiApplying] = useState(false);
+  const [aiFiles, setAiFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [aiFileResult, setAiFileResult] = useState<string | null>(null);
+  // データチェック
+  const [dcOpen, setDcOpen] = useState(false);
+  const [dcFile, setDcFile] = useState<File | null>(null);
+  const [dcMonth, setDcMonth] = useState("");
+  const [dcLoading, setDcLoading] = useState(false);
+  const [dcResult, setDcResult] = useState<{
+    month: string;
+    mapping: Record<string, number | string | null>;
+    results: {
+      name: string;
+      employeeNumber: string;
+      checks: {
+        field: string;
+        fieldLabel: string;
+        excelValue: number | string | null;
+        appValue: number | string | null;
+        prevMonthValue: number | string | null;
+        status: "ok" | "mismatch" | "changed" | "warning" | "no_data";
+        message: string;
+      }[];
+    }[];
+    missing: string[];
+    newInExcel: string[];
+  } | null>(null);
+  const [dcError, setDcError] = useState("");
+  // Excelマッピング設定
+  const [companySettingsDocId, setCompanySettingsDocId] = useState<string | null>(null);
+  const [excelMapping, setExcelMapping] = useState<Record<string, string>>({});
+  const [mappingOpen, setMappingOpen] = useState(false);
+  const [mappingSaving, setMappingSaving] = useState(false);
+  // 会社レベル手当名
+  const [allowanceNames, setAllowanceNames] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!loading && !user) router.push("/login");
@@ -185,6 +227,8 @@ function CompanyPageContent() {
       let closingDay: number | null = null;
       let payDay: number | null = null;
       let standardWorkingHours = 160;
+      let foundDocId: string | null = null;
+      let foundExcelMapping: Record<string, string> = {};
       // 完全一致 or shortNameがcompanyNameで始まるエントリも対象にする
       companiesSnapshot.docs.forEach((d) => {
         const data = d.data();
@@ -193,14 +237,23 @@ function CompanyPageContent() {
         const isMatch = matchingNames.has(sn) || matchingNames.has(on)
           || sn.startsWith(companyName) || on.startsWith(companyName);
         if (isMatch) {
+          foundDocId = d.id;
           if (data.closingDay != null) closingDay = data.closingDay;
           if (data.payDay != null) payDay = data.payDay;
           if (data.standardWorkingHours && data.standardWorkingHours !== 160) {
             standardWorkingHours = data.standardWorkingHours;
           }
+          if (data.excelMapping) {
+            foundExcelMapping = data.excelMapping;
+          }
+          if (data.allowanceNames) {
+            setAllowanceNames(data.allowanceNames);
+          }
         }
       });
       setCompany({ name: companyName, closingDay, payDay, standardWorkingHours });
+      setCompanySettingsDocId(foundDocId);
+      setExcelMapping(foundExcelMapping);
 
       const snapshot = await getDocs(collection(db, "monthlyPayroll"));
       const empMap = new Map<string, EmployeeRow>();
@@ -258,15 +311,23 @@ function CompanyPageContent() {
           allowance6: data.allowance6 || 0,
           allowance6Name: data.allowance6Name || "手当6",
           deemedOvertimePay: data.deemedOvertimePay || 0,
+          commutingUnitPrice: data.commutingUnitPrice || 0,
           commutingType: data.commutingType || "月額",
+          department: data.department || "",
           employeeMemo: data.employeeMemo || "",
+          conversionDate: data.conversionDate || "",
           residentTax: data.residentTax || 0,
           socialInsuranceGrade: data.socialInsuranceGrade || "",
           unitPrice: data.unitPrice || 0,
+          bonus: data.bonus || 0,
         };
       });
 
-      setMonths(Array.from(monthSet).sort());
+      const sortedMonths = Array.from(monthSet).sort();
+      setMonths(sortedMonths);
+      if (sortedMonths.length > 0 && !dcMonth) {
+        setDcMonth(sortedMonths[sortedMonths.length - 1]);
+      }
       setEmployees(
         Array.from(empMap.values()).sort((a, b) =>
           a.employeeNumber.localeCompare(b.employeeNumber)
@@ -304,7 +365,7 @@ function CompanyPageContent() {
   }, [user, loadData]);
 
   // 汎用フィールド保存
-  const saveField = async (docId: string, field: string, value: number | boolean | string) => {
+  const saveField = async (docId: string, field: string, value: number | boolean | string | string[]) => {
     try {
       await fetch("/api/payroll/update", {
         method: "POST",
@@ -382,6 +443,99 @@ function CompanyPageContent() {
     }
   };
 
+  // conversionDate は全月に反映
+  const saveConversionDate = async (emp: EmployeeRow, value: string) => {
+    try {
+      const docIds = Object.values(emp.months).map((m) => m.docId);
+      await Promise.all(
+        docIds.map((docId) =>
+          fetch("/api/payroll/update", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ docId, field: "conversionDate", value }),
+          })
+        )
+      );
+      setEmployees((prev) =>
+        prev.map((e) => {
+          if (e.employeeNumber !== emp.employeeNumber && e.name !== emp.name) return e;
+          const newMonths = { ...e.months };
+          for (const m of Object.keys(newMonths)) {
+            newMonths[m] = { ...newMonths[m], conversionDate: value };
+          }
+          return { ...e, months: newMonths };
+        })
+      );
+      if (detailEmployee && detailEmployee.name === emp.name) {
+        setDetailEmployee((prev) => {
+          if (!prev) return prev;
+          const newMonths = { ...prev.months };
+          for (const m of Object.keys(newMonths)) {
+            newMonths[m] = { ...newMonths[m], conversionDate: value };
+          }
+          return { ...prev, months: newMonths };
+        });
+      }
+    } catch (e) {
+      console.error("Save conversionDate failed:", e);
+    }
+  };
+
+  // フィールドを保存（fromMonth指定時はその月以降のみ、省略時は全月）
+  const saveEmployeeField = async (emp: EmployeeRow, field: string, value: string, fromMonth?: string) => {
+    try {
+      const targetEntries = Object.entries(emp.months).filter(
+        ([m]) => !fromMonth || m >= fromMonth
+      );
+      await Promise.all(
+        targetEntries.map(([, data]) =>
+          fetch("/api/payroll/update", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ docId: data.docId, field, value }),
+          })
+        )
+      );
+      const updateMonths = (monthsObj: Record<string, MonthlyData>) => {
+        const newMonths = { ...monthsObj };
+        for (const m of Object.keys(newMonths)) {
+          if (!fromMonth || m >= fromMonth) {
+            newMonths[m] = { ...newMonths[m], [field]: value };
+          }
+        }
+        return newMonths;
+      };
+      setEmployees((prev) =>
+        prev.map((e) => {
+          if (e.employeeNumber !== emp.employeeNumber && e.name !== emp.name) return e;
+          return { ...e, months: updateMonths(e.months) };
+        })
+      );
+      if (detailEmployee && detailEmployee.name === emp.name) {
+        setDetailEmployee((prev) => {
+          if (!prev) return prev;
+          return { ...prev, months: updateMonths(prev.months) };
+        });
+      }
+    } catch (e) {
+      console.error(`Save ${field} failed:`, e);
+    }
+  };
+
+  // 手当名を会社レベルで保存
+  const saveAllowanceName = async (nameField: string, value: string) => {
+    const updated = { ...allowanceNames, [nameField]: value };
+    setAllowanceNames(updated);
+    if (!companySettingsDocId) return;
+    try {
+      await updateDoc(doc(db, "companySettings", companySettingsDocId), {
+        allowanceNames: updated,
+      });
+    } catch (e) {
+      console.error("Save allowanceName failed:", e);
+    }
+  };
+
   // Slackメッセージ処理済みトグル
   const toggleSlackProcessed = async (msgDocId: string, current: boolean) => {
     try {
@@ -403,10 +557,42 @@ function CompanyPageContent() {
     if (!aiInstruction.trim() || aiLoading) return;
     setAiLoading(true);
     setAiResult(null);
+    setAiFileResult(null);
+
+    // ファイル添付ありの場合は分析APIを使用
+    if (aiFiles.length > 0) {
+      try {
+        const latestMonth = months.length > 0 ? months[months.length - 1] : "";
+        const formData = new FormData();
+        formData.append("instruction", aiInstruction);
+        formData.append("companyName", company?.name || "");
+        formData.append("month", latestMonth);
+        for (const f of aiFiles) {
+          formData.append("files", f);
+        }
+        const res = await fetch("/api/ai/analyze-files", {
+          method: "POST",
+          body: formData,
+        });
+        const result = await res.json();
+        if (!res.ok) {
+          setAiResult({ success: false, error: result.error || "エラーが発生しました" });
+        } else {
+          setAiFileResult(result.analysis);
+        }
+      } catch (e) {
+        console.error("AI file analysis failed:", e);
+        setAiResult({ success: false, error: "AI分析に失敗しました" });
+      } finally {
+        setAiLoading(false);
+      }
+      return;
+    }
+
+    // ファイルなしの場合は従来の指示解析
     try {
       const activeEmps = employees.filter((e) => e.status !== "退社");
       const empList = activeEmps.map((e) => ({ name: e.name, employeeNumber: e.employeeNumber }));
-      // 現在の人メモを収集
       const employeeMemos: Record<string, string> = {};
       for (const emp of activeEmps) {
         const latestMonth = [...months].reverse().find((m) => emp.months[m]);
@@ -523,6 +709,38 @@ function CompanyPageContent() {
     }
   };
 
+  // データチェック実行
+  const handleDataCheck = async () => {
+    if (!dcFile || !dcMonth || !company) return;
+    setDcLoading(true);
+    setDcError("");
+    setDcResult(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", dcFile);
+      formData.append("companyName", company.name);
+      formData.append("month", dcMonth);
+      if (Object.keys(excelMapping).length > 0) {
+        formData.append("excelMapping", JSON.stringify(excelMapping));
+      }
+      const res = await fetch("/api/data-check/analyze", {
+        method: "POST",
+        body: formData,
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        setDcError(result.error || "チェックに失敗しました");
+      } else {
+        setDcResult(result);
+      }
+    } catch (e) {
+      console.error("Data check failed:", e);
+      setDcError("データチェックに失敗しました");
+    } finally {
+      setDcLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -591,37 +809,91 @@ function CompanyPageContent() {
         ) : (
           <>
             {/* Slack連絡事項 */}
-            {slackMessages.length > 0 && (
-              <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-sm font-medium text-blue-800">
-                    Slack連絡事項（{slackMessages.filter((m) => !m.processed).length}件未処理）
-                  </h3>
-                </div>
-                <div className="space-y-1.5">
-                  {slackMessages.map((msg) => (
-                    <div
-                      key={msg.docId}
-                      className={`flex items-start gap-2 rounded px-2.5 py-1.5 text-xs ${msg.processed ? "bg-blue-100/50 text-blue-400 line-through" : "bg-white text-zinc-800 border border-blue-100"}`}
-                    >
-                      <button
-                        onClick={() => toggleSlackProcessed(msg.docId, msg.processed)}
-                        className={`mt-0.5 shrink-0 h-4 w-4 rounded border ${msg.processed ? "bg-blue-500 border-blue-500 text-white" : "border-zinc-300 hover:border-blue-400"} flex items-center justify-center`}
-                        title={msg.processed ? "未処理に戻す" : "処理済みにする"}
-                      >
-                        {msg.processed && <span className="text-[10px]">✓</span>}
-                      </button>
-                      <span className="flex-1 whitespace-pre-wrap">{msg.text}</span>
-                      <span className="shrink-0 text-[10px] text-zinc-400">
-                        {msg.createdAt.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" })}
-                        {" "}
-                        {msg.createdAt.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" })}
-                      </span>
+            {slackMessages.length > 0 && (() => {
+              const unprocessed = slackMessages.filter((m) => !m.processed);
+              const processed = slackMessages.filter((m) => m.processed);
+              return (
+                <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
+                  <button
+                    onClick={() => setSlackOpen(!slackOpen)}
+                    className="flex items-center justify-between w-full text-left"
+                  >
+                    <h3 className="text-sm font-medium text-blue-800">
+                      Slack連絡事項
+                      {unprocessed.length > 0 && (
+                        <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-blue-600 text-white text-[10px] font-bold px-1.5 py-0.5">
+                          {unprocessed.length}
+                        </span>
+                      )}
+                    </h3>
+                    <span className="text-blue-400 text-xs">{slackOpen ? "▲ 閉じる" : "▼ 開く"}</span>
+                  </button>
+                  {slackOpen && (
+                    <div className="mt-2">
+                      {/* 未処理 */}
+                      {unprocessed.length > 0 && (
+                        <div className="max-h-48 overflow-y-auto space-y-1.5">
+                          {unprocessed.map((msg) => (
+                            <div
+                              key={msg.docId}
+                              className="flex items-start gap-2 rounded px-2.5 py-1.5 text-xs bg-white text-zinc-800 border border-blue-100"
+                            >
+                              <button
+                                onClick={() => toggleSlackProcessed(msg.docId, msg.processed)}
+                                className="mt-0.5 shrink-0 h-4 w-4 rounded border border-zinc-300 hover:border-blue-400 flex items-center justify-center"
+                                title="処理済みにする"
+                              />
+                              <span className="flex-1 whitespace-pre-wrap">{msg.text}</span>
+                              <span className="shrink-0 text-[10px] text-zinc-400">
+                                {msg.createdAt.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" })}
+                                {" "}
+                                {msg.createdAt.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" })}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {unprocessed.length === 0 && (
+                        <p className="text-xs text-blue-400 py-1">未処理のメッセージはありません</p>
+                      )}
+                      {/* 処理済み */}
+                      {processed.length > 0 && (
+                        <div className="mt-2">
+                          <button
+                            onClick={() => setSlackShowProcessed(!slackShowProcessed)}
+                            className="text-[10px] text-blue-400 hover:text-blue-600 mb-1"
+                          >
+                            処理済み（{processed.length}件）{slackShowProcessed ? " ▲" : " ▼"}
+                          </button>
+                          {slackShowProcessed && (
+                            <div className="max-h-32 overflow-y-auto space-y-1">
+                              {processed.map((msg) => (
+                                <div
+                                  key={msg.docId}
+                                  className="flex items-start gap-2 rounded px-2.5 py-1 text-xs bg-blue-100/50 text-blue-400"
+                                >
+                                  <button
+                                    onClick={() => toggleSlackProcessed(msg.docId, msg.processed)}
+                                    className="mt-0.5 shrink-0 h-4 w-4 rounded border bg-blue-500 border-blue-500 text-white flex items-center justify-center"
+                                    title="未処理に戻す"
+                                  >
+                                    <span className="text-[10px]">✓</span>
+                                  </button>
+                                  <span className="flex-1 whitespace-pre-wrap line-through">{msg.text}</span>
+                                  <span className="shrink-0 text-[10px] text-blue-300">
+                                    {msg.createdAt.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" })}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
-                  ))}
+                  )}
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* 附番重複アラート */}
             {duplicateNumbers.length > 0 && (
@@ -647,18 +919,63 @@ function CompanyPageContent() {
                   value={aiInstruction}
                   onChange={(e) => setAiInstruction(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") handleAiInstruction(); }}
-                  placeholder="給与変更の指示を入力..."
+                  placeholder={aiFiles.length > 0 ? "資料について指示...（例: この2つを比較して）" : "給与変更の指示を入力..."}
                   className="flex-1 rounded-md border border-purple-200 bg-white px-3 py-1.5 text-sm text-zinc-800 placeholder-zinc-400 focus:border-purple-400 focus:outline-none"
                   disabled={aiLoading}
                 />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept=".pdf,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.gif,.webp,.txt"
+                  onChange={(e) => {
+                    const selected = Array.from(e.target.files || []);
+                    if (selected.length > 0) {
+                      setAiFiles((prev) => [...prev, ...selected]);
+                    }
+                    e.target.value = "";
+                  }}
+                  className="hidden"
+                  disabled={aiLoading}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className={`shrink-0 rounded-md border px-3 py-1.5 text-sm inline-flex items-center gap-1 ${aiFiles.length > 0 ? "border-purple-500 bg-purple-100 text-purple-800 font-medium" : "border-purple-200 bg-white text-purple-600 hover:bg-purple-50"}`}
+                  disabled={aiLoading}
+                >
+                  &#128206; {aiFiles.length > 0 ? `${aiFiles.length}件添付中` : "資料を添付"}
+                </button>
                 <button
                   onClick={handleAiInstruction}
                   disabled={aiLoading || !aiInstruction.trim()}
                   className="shrink-0 rounded-md bg-purple-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
                 >
-                  {aiLoading ? "解析中..." : "実行"}
+                  {aiLoading ? "分析中..." : "実行"}
                 </button>
               </div>
+              {/* 添付ファイル一覧 */}
+              {aiFiles.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {aiFiles.map((f, i) => (
+                    <span key={i} className="inline-flex items-center gap-1 rounded bg-purple-100 px-2 py-0.5 text-[11px] text-purple-700">
+                      {f.name}
+                      <button
+                        onClick={() => setAiFiles((prev) => prev.filter((_, j) => j !== i))}
+                        className="text-purple-400 hover:text-purple-700 font-bold"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                  <button
+                    onClick={() => setAiFiles([])}
+                    className="text-[11px] text-purple-400 hover:text-purple-600"
+                  >
+                    全削除
+                  </button>
+                </div>
+              )}
 
               {/* AI結果表示 */}
               {aiResult && (
@@ -675,6 +992,7 @@ function CompanyPageContent() {
                             deemedOvertimePay: "みなし残業手当", deductions: "控除",
                             residentTax: "住民税", unitPrice: "単価",
                             socialInsuranceGrade: "社保等級", overtimeHours: "残業時間", overtimePay: "残業代",
+                            bonus: "賞与",
                             employeeMemo: "人メモ", memo: "月メモ",
                           };
                           const isAppend = change.mode === "append";
@@ -751,6 +1069,352 @@ function CompanyPageContent() {
                   )}
                 </div>
               )}
+
+              {/* ファイル分析結果 */}
+              {aiFileResult && (
+                <div className="mt-3 rounded-md border border-purple-200 bg-white p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-purple-700">AI分析結果</span>
+                    <button
+                      onClick={() => { setAiFileResult(null); setAiFiles([]); }}
+                      className="text-xs text-zinc-400 hover:text-zinc-600"
+                    >
+                      閉じる
+                    </button>
+                  </div>
+                  <div className="text-sm text-zinc-800 whitespace-pre-wrap leading-relaxed prose prose-sm max-w-none">
+                    {aiFileResult}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* データチェック */}
+            <div className="mb-3 rounded-lg border border-teal-200 bg-teal-50/50">
+              <button
+                onClick={() => setDcOpen(!dcOpen)}
+                className="w-full flex items-center justify-between px-4 py-2.5 text-sm font-medium text-teal-800 hover:bg-teal-100/50 rounded-lg"
+              >
+                <span>データチェック</span>
+                <span className="text-xs text-teal-500">{dcOpen ? "▲" : "▼"}</span>
+              </button>
+              {dcOpen && (
+                <div className="px-4 pb-4">
+                  <div className="flex items-end gap-3 mb-3">
+                    <div className="flex-1">
+                      <label className="block text-[11px] text-teal-600 mb-1">Excelファイル</label>
+                      <input
+                        type="file"
+                        accept=".xlsx,.xls"
+                        onChange={(e) => setDcFile(e.target.files?.[0] || null)}
+                        className="w-full text-xs file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:bg-teal-600 file:text-white file:cursor-pointer"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-teal-600 mb-1">対象月</label>
+                      <select
+                        value={dcMonth}
+                        onChange={(e) => setDcMonth(e.target.value)}
+                        className="rounded border border-teal-200 bg-white px-2 py-1.5 text-xs text-zinc-800"
+                      >
+                        <option value="">選択...</option>
+                        {[...months].reverse().map((m) => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <button
+                      onClick={handleDataCheck}
+                      disabled={dcLoading || !dcFile || !dcMonth}
+                      className="shrink-0 rounded-md bg-teal-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-50"
+                    >
+                      {dcLoading ? "チェック中..." : "チェック実行"}
+                    </button>
+                  </div>
+
+                  {/* マッピング設定 */}
+                  <div className="mb-3">
+                    <button
+                      onClick={() => setMappingOpen(!mappingOpen)}
+                      className="text-xs text-teal-600 hover:text-teal-800 flex items-center gap-1"
+                    >
+                      <span>マッピング設定</span>
+                      <span className="text-[10px]">{mappingOpen ? "▲" : "▼"}</span>
+                      {Object.values(excelMapping).some((v) => v) && (
+                        <span className="text-[10px] text-teal-500 ml-1">(設定済)</span>
+                      )}
+                    </button>
+                    {mappingOpen && (
+                      <div className="mt-2 rounded-md border border-teal-200 bg-white p-3">
+                        <p className="text-[11px] text-zinc-500 mb-2">Excel列名を入力してAIマッピングの精度を向上させます</p>
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                          {([
+                            ["employeeNumber", "社員番号"],
+                            ["department", "所属"],
+                            ["baseSalary", "基本給"],
+                            ["commutingAllowance", "通勤手当"],
+                            ["commutingUnitPrice", "交通費単価"],
+                            ["deemedOvertimePay", "みなし残業"],
+                            ["residentTax", "住民税"],
+                            ["unitPrice", "単価"],
+                            ["socialInsuranceGrade", "社保等級"],
+                            ["allowance1", allowanceNames["allowance1Name"] || "手当1"],
+                            ["allowance2", allowanceNames["allowance2Name"] || "手当2"],
+                            ["allowance3", allowanceNames["allowance3Name"] || "手当3"],
+                            ["allowance4", allowanceNames["allowance4Name"] || "手当4"],
+                            ["allowance5", allowanceNames["allowance5Name"] || "手当5"],
+                            ["allowance6", allowanceNames["allowance6Name"] || "手当6"],
+                            ["bonus", "賞与"],
+                          ] as const).map(([key, label]) => (
+                            <div key={key} className="flex items-center gap-2">
+                              <label className="text-[11px] text-zinc-600 w-16 shrink-0 text-right">{label}</label>
+                              <input
+                                type="text"
+                                value={excelMapping[key] || ""}
+                                onChange={(e) => setExcelMapping((prev) => ({ ...prev, [key]: e.target.value }))}
+                                placeholder={label}
+                                className="flex-1 rounded border border-zinc-200 px-2 py-1 text-xs text-zinc-800 placeholder-zinc-300 focus:border-teal-400 focus:outline-none"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                        <div className="mt-3 flex items-center gap-2">
+                          <button
+                            onClick={async () => {
+                              if (!companySettingsDocId) return;
+                              setMappingSaving(true);
+                              try {
+                                await updateDoc(doc(db, "companySettings", companySettingsDocId), {
+                                  excelMapping,
+                                });
+                              } catch (e) {
+                                console.error("Save mapping failed:", e);
+                                alert("保存に失敗しました");
+                              } finally {
+                                setMappingSaving(false);
+                              }
+                            }}
+                            disabled={mappingSaving || !companySettingsDocId}
+                            className="rounded-md bg-teal-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-teal-700 disabled:opacity-50"
+                          >
+                            {mappingSaving ? "保存中..." : "保存"}
+                          </button>
+                          {!companySettingsDocId && (
+                            <span className="text-[10px] text-red-500">会社設定が見つかりません</span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {dcError && (
+                    <div className="rounded-md border border-red-200 bg-red-50 p-3 mb-3">
+                      <p className="text-sm text-red-700">{dcError}</p>
+                    </div>
+                  )}
+
+                  {dcResult && (
+                    <div>
+                      {/* Summary */}
+                      <div className="flex items-center gap-4 mb-3 text-xs text-teal-700">
+                        <span>{dcResult.results.length}名チェック</span>
+                        <span className="text-red-600">
+                          不一致: {dcResult.results.reduce((c, r) => c + r.checks.filter((ck) => ck.status === "mismatch").length, 0)}件
+                        </span>
+                        <span className="text-amber-600">
+                          変動: {dcResult.results.reduce((c, r) => c + r.checks.filter((ck) => ck.status === "changed").length, 0)}件
+                        </span>
+                        {dcResult.missing.length > 0 && (
+                          <span className="text-orange-600">Excelに無い: {dcResult.missing.length}名</span>
+                        )}
+                        {dcResult.newInExcel.length > 0 && (
+                          <span className="text-blue-600">アプリに無い: {dcResult.newInExcel.length}名</span>
+                        )}
+                      </div>
+
+                      {/* 所属一括反映ボタン */}
+                      {dcResult.results.some((r) => r.checks.find((ck) => ck.field === "department" && ck.excelValue)) && (
+                        <div className="mb-3">
+                          <button
+                            onClick={async () => {
+                              if (!confirm("Excelの所属データをアプリに一括反映しますか？（現在の対象月以降に反映）")) return;
+                              let count = 0;
+                              for (const r of dcResult.results) {
+                                const deptCheck = r.checks.find((ck) => ck.field === "department");
+                                if (!deptCheck?.excelValue) continue;
+                                const deptVal = String(deptCheck.excelValue).trim();
+                                // 社員番号 or 名前でマッチ
+                                const emp = employees.find((e) =>
+                                  (r.employeeNumber && e.employeeNumber === r.employeeNumber) ||
+                                  e.name.replace(/[\s　]+/g, "") === r.name.replace(/[\s　]+/g, "")
+                                );
+                                if (!emp) continue;
+                                // dcMonth以降の月に反映
+                                const targetMonths = Object.entries(emp.months).filter(([m]) => m >= dcMonth);
+                                await Promise.all(
+                                  targetMonths.map(([, data]) =>
+                                    fetch("/api/payroll/update", {
+                                      method: "POST",
+                                      headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({ docId: data.docId, field: "department", value: deptVal }),
+                                    })
+                                  )
+                                );
+                                count++;
+                              }
+                              alert(`${count}名の所属を反映しました`);
+                              loadData();
+                            }}
+                            className="rounded-md border border-teal-300 bg-white px-3 py-1.5 text-xs font-medium text-teal-700 hover:bg-teal-50"
+                          >
+                            Excelの所属をアプリに一括反映（{dcMonth}~）
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Results table */}
+                      <div className="overflow-x-auto rounded border border-zinc-200 bg-white">
+                        <table className="text-xs border-collapse w-full">
+                          <thead>
+                            <tr className="bg-zinc-50 border-b border-zinc-200">
+                              <th className="sticky left-0 z-10 bg-zinc-50 px-3 py-2 text-left font-medium text-zinc-600 border-r border-zinc-200 min-w-[100px]">
+                                氏名
+                              </th>
+                              {(() => {
+                                // Collect all unique fields across results
+                                const fieldSet = new Map<string, string>();
+                                for (const r of dcResult.results) {
+                                  for (const ck of r.checks) {
+                                    if (!fieldSet.has(ck.field)) fieldSet.set(ck.field, ck.fieldLabel);
+                                  }
+                                }
+                                return Array.from(fieldSet.entries()).map(([field, label]) => (
+                                  <th key={field} className="px-2 py-2 text-center font-medium text-zinc-600 border-r border-zinc-100 min-w-[90px] whitespace-nowrap">
+                                    {label}
+                                  </th>
+                                ));
+                              })()}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {dcResult.results.map((r) => {
+                              const fieldSet = new Map<string, string>();
+                              for (const res of dcResult.results) {
+                                for (const ck of res.checks) {
+                                  if (!fieldSet.has(ck.field)) fieldSet.set(ck.field, ck.fieldLabel);
+                                }
+                              }
+                              const allFields = Array.from(fieldSet.keys());
+                              const checkMap = new Map(r.checks.map((ck) => [ck.field, ck]));
+                              const hasIssue = r.checks.some((ck) => ck.status === "mismatch" || ck.status === "changed");
+
+                              return (
+                                <tr key={r.name} className={`border-b border-zinc-100 ${hasIssue ? "" : "opacity-60"}`}>
+                                  <td className="sticky left-0 z-10 bg-white px-3 py-2 border-r border-zinc-200 whitespace-nowrap">
+                                    <div className="font-medium text-zinc-800">{r.name}</div>
+                                    {r.employeeNumber && (
+                                      <div className="text-[10px] text-zinc-400">{r.employeeNumber}</div>
+                                    )}
+                                  </td>
+                                  {allFields.map((field) => {
+                                    const ck = checkMap.get(field);
+                                    if (!ck) {
+                                      return (
+                                        <td key={field} className="px-2 py-2 text-center text-zinc-300 border-r border-zinc-100">
+                                          -
+                                        </td>
+                                      );
+                                    }
+                                    const bgColor =
+                                      ck.status === "ok" ? "bg-green-50" :
+                                      ck.status === "mismatch" ? "bg-red-50" :
+                                      ck.status === "changed" ? "bg-amber-50" :
+                                      ck.status === "no_data" ? "bg-zinc-50" : "";
+                                    const textColor =
+                                      ck.status === "ok" ? "text-green-700" :
+                                      ck.status === "mismatch" ? "text-red-700" :
+                                      ck.status === "changed" ? "text-amber-700" :
+                                      "text-zinc-400";
+
+                                    return (
+                                      <td
+                                        key={field}
+                                        className={`px-2 py-1.5 border-r border-zinc-100 ${bgColor}`}
+                                        title={ck.message}
+                                      >
+                                        <div className={`text-center ${textColor}`}>
+                                          {ck.status === "ok" && (
+                                            <span className="text-[10px]">
+                                              {typeof ck.excelValue === "number" ? ck.excelValue.toLocaleString() : ck.excelValue}
+                                            </span>
+                                          )}
+                                          {ck.status === "mismatch" && (
+                                            <div>
+                                              <div className="font-bold text-[11px]">
+                                                E: {typeof ck.excelValue === "number" ? ck.excelValue.toLocaleString() : ck.excelValue}
+                                              </div>
+                                              <div className="text-[10px] text-red-500">
+                                                A: {typeof ck.appValue === "number" ? ck.appValue.toLocaleString() : ck.appValue}
+                                              </div>
+                                            </div>
+                                          )}
+                                          {ck.status === "changed" && (
+                                            <div>
+                                              <div className="text-[11px]">
+                                                {typeof ck.excelValue === "number" ? ck.excelValue.toLocaleString() : ck.excelValue}
+                                              </div>
+                                              <div className="text-[10px] text-amber-500">
+                                                前月: {typeof ck.prevMonthValue === "number" ? ck.prevMonthValue.toLocaleString() : ck.prevMonthValue}
+                                              </div>
+                                            </div>
+                                          )}
+                                          {ck.status === "no_data" && (
+                                            <span className="text-[10px]">-</span>
+                                          )}
+                                        </div>
+                                      </td>
+                                    );
+                                  })}
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* People diff */}
+                      {(dcResult.missing.length > 0 || dcResult.newInExcel.length > 0) && (
+                        <div className="mt-3 grid grid-cols-2 gap-3">
+                          {dcResult.missing.length > 0 && (
+                            <div className="rounded-md border border-orange-200 bg-orange-50 p-3">
+                              <p className="text-xs font-medium text-orange-800 mb-1">
+                                Excelに無い（アプリのみ）: {dcResult.missing.length}名
+                              </p>
+                              <div className="text-[11px] text-orange-700 space-y-0.5">
+                                {dcResult.missing.map((n) => (
+                                  <div key={n}>{n}</div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {dcResult.newInExcel.length > 0 && (
+                            <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
+                              <p className="text-xs font-medium text-blue-800 mb-1">
+                                アプリに無い（Excelのみ）: {dcResult.newInExcel.length}名
+                              </p>
+                              <div className="text-[11px] text-blue-700 space-y-0.5">
+                                {dcResult.newInExcel.map((n) => (
+                                  <div key={n}>{n}</div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* ソートボタン + 完了ボタン */}
@@ -766,13 +1430,36 @@ function CompanyPageContent() {
                   </button>
                 ))}
               </div>
-              <button
-                onClick={handleComplete}
-                disabled={completing}
-                className="px-3 py-1.5 text-xs rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 font-medium"
-              >
-                {completing ? "生成中..." : `${formatMonthLabel(months[months.length - 1])} 完了 → 翌月生成`}
-              </button>
+              <div className="flex items-center gap-2">
+                {bonusMonth ? (
+                  <div className="flex items-center gap-1.5 rounded-md border border-green-300 bg-green-50 px-2 py-1">
+                    <span className="text-xs text-green-700 font-medium">賞与入力中: {bonusMonth}</span>
+                    <button
+                      onClick={() => setBonusMonth(null)}
+                      className="text-xs text-green-600 hover:text-green-800 font-bold"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 rounded-md border border-green-300 bg-white pl-3 pr-1 py-1">
+                    <span className="text-xs font-medium text-green-700 whitespace-nowrap">賞与追加</span>
+                    <input
+                      type="month"
+                      onChange={(e) => { if (e.target.value) setBonusMonth(e.target.value); }}
+                      className="text-xs text-green-700 cursor-pointer bg-transparent focus:outline-none"
+                      title="賞与を入力する月を選択"
+                    />
+                  </div>
+                )}
+                <button
+                  onClick={handleComplete}
+                  disabled={completing}
+                  className="px-3 py-1.5 text-xs rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 font-medium"
+                >
+                  {completing ? "生成中..." : `${formatMonthLabel(months[months.length - 1])} 完了 → 翌月生成`}
+                </button>
+              </div>
             </div>
 
             <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white">
@@ -799,7 +1486,9 @@ function CompanyPageContent() {
                       companyName={company?.name || ""}
                       onSave={saveField}
                       onSaveEmployeeMemo={saveEmployeeMemo}
+                      onSaveConversionDate={saveConversionDate}
                       onClickName={() => setDetailEmployee(emp)}
+                      bonusMonth={bonusMonth}
                     />
                   ))}
                   {retiredEmployees.length > 0 && (
@@ -818,7 +1507,9 @@ function CompanyPageContent() {
                           companyName={company?.name || ""}
                           onSave={saveField}
                           onSaveEmployeeMemo={saveEmployeeMemo}
+                          onSaveConversionDate={saveConversionDate}
                           onClickName={() => setDetailEmployee(emp)}
+                          bonusMonth={bonusMonth}
                           retired
                         />
                       ))}
@@ -839,7 +1530,11 @@ function CompanyPageContent() {
           swh={swh}
           onSave={saveField}
           onSaveEmployeeMemo={saveEmployeeMemo}
+          onSaveConversionDate={saveConversionDate}
           onClose={() => setDetailEmployee(null)}
+          allowanceNames={allowanceNames}
+          onSaveAllowanceName={saveAllowanceName}
+          onSaveEmployeeField={saveEmployeeField}
         />
       )}
     </div>
@@ -976,21 +1671,26 @@ function TableRow({
   companyName,
   onSave,
   onSaveEmployeeMemo,
+  onSaveConversionDate,
   onClickName,
+  bonusMonth,
   retired,
 }: {
   emp: EmployeeRow;
   months: string[];
   swh: number;
   companyName: string;
-  onSave: (docId: string, field: string, value: number | boolean | string) => void;
+  onSave: (docId: string, field: string, value: number | boolean | string | string[]) => void;
   onSaveEmployeeMemo: (emp: EmployeeRow, value: string) => void;
+  onSaveConversionDate: (emp: EmployeeRow, value: string) => void;
   onClickName: () => void;
+  bonusMonth: string | null;
   retired?: boolean;
 }) {
   // employeeMemo は最新月の値を表示
   const latestMonth = [...months].reverse().find((m) => emp.months[m]);
   const currentEmployeeMemo = latestMonth ? emp.months[latestMonth].employeeMemo : "";
+  const currentConversionDate = latestMonth ? emp.months[latestMonth].conversionDate : "";
 
   return (
     <tr className={`border-b border-zinc-100 ${retired ? "opacity-50" : "hover:bg-zinc-50/50"}`}>
@@ -1008,6 +1708,10 @@ function TableRow({
         <EmployeeMemoCell
           initial={currentEmployeeMemo}
           onSave={(v) => onSaveEmployeeMemo(emp, v)}
+        />
+        <ConversionDateCell
+          initial={currentConversionDate}
+          onSave={(v) => onSaveConversionDate(emp, v)}
         />
       </td>
 
@@ -1029,7 +1733,7 @@ function TableRow({
               <div className="flex justify-between gap-1">
                 <button
                   onClick={() => onSave(data.docId, "commutingType", data.commutingType === "日額" ? "月額" : "日額")}
-                  className={`shrink-0 text-[10px] rounded px-0.5 ${data.commutingType === "日額" ? "bg-orange-100 text-orange-600" : "text-zinc-400"}`}
+                  className={`shrink-0 text-xs rounded px-0.5 ${data.commutingType === "日額" ? "bg-orange-100 text-orange-600" : "text-zinc-400"}`}
                   title={`通勤: ${data.commutingType || "月額"}（クリックで切替）`}
                 >
                   通{data.commutingType === "日額" ? "日" : ""}
@@ -1046,6 +1750,16 @@ function TableRow({
                   <span className="text-right text-zinc-700 tabular-nums px-1">{fmt(data.deemedOvertimePay)}</span>
                 </div>
               )}
+              {(data.bonus > 0 || bonusMonth === m) && (
+                <div className="flex justify-between gap-1">
+                  <span className="text-green-600 shrink-0 font-medium">賞</span>
+                  {bonusMonth === m ? (
+                    <NumCell docId={data.docId} field="bonus" value={data.bonus} onSave={onSave} />
+                  ) : (
+                    <span className="text-right text-green-700 tabular-nums px-1 font-medium">{fmt(data.bonus)}</span>
+                  )}
+                </div>
+              )}
               <div className="flex justify-between gap-1">
                 <span className="text-zinc-400 shrink-0">控</span>
                 <NumCell docId={data.docId} field="deductions" value={data.deductions} onSave={onSave} />
@@ -1057,8 +1771,15 @@ function TableRow({
               <MemoCell docId={data.docId} initial={data.memo} onSave={(id, v) => onSave(id, "memo", v)} />
             </div>
             {hasEvents && (
-              <div className="mt-1 text-[10px] text-amber-600 leading-tight">
-                {data.events.map((e, i) => <div key={i}>{e}</div>)}
+              <div className="mt-1 text-[10px] text-amber-600 leading-tight flex items-start gap-0.5">
+                <div className="flex-1">
+                  {data.events.map((e, i) => <div key={i}>{e}</div>)}
+                </div>
+                <button
+                  onClick={() => onSave(data.docId, "events", [])}
+                  className="shrink-0 text-amber-400 hover:text-amber-600 leading-none"
+                  title="イベントをクリア"
+                >×</button>
               </div>
             )}
           </td>
@@ -1139,6 +1860,36 @@ function EmployeeMemoCell({
 }
 
 // ========================================
+// Conversion Date Cell (転換予定日, 全月共通)
+// ========================================
+function ConversionDateCell({
+  initial,
+  onSave,
+}: {
+  initial: string;
+  onSave: (value: string) => void;
+}) {
+  const [value, setValue] = useState(initial);
+
+  const handleChange = (v: string) => {
+    setValue(v);
+    onSave(v);
+  };
+
+  return (
+    <div className="flex items-center gap-1.5 mt-1">
+      <span className="text-[10px] text-violet-500 shrink-0">転換</span>
+      <input
+        type="date"
+        value={value}
+        onChange={(e) => handleChange(e.target.value)}
+        className="flex-1 rounded border border-violet-200 bg-violet-50/50 px-1.5 py-0.5 text-[10px] text-violet-800 focus:border-violet-400 focus:outline-none"
+      />
+    </div>
+  );
+}
+
+// ========================================
 // Detail Memo Cell (月メモ, モーダル用・大きめ)
 // ========================================
 function DetailMemoCell({
@@ -1175,6 +1926,173 @@ function DetailMemoCell({
 }
 
 // ========================================
+// Inline Edit Field (クリックで編集可能なテキスト)
+// ========================================
+function InlineEditField({
+  value,
+  placeholder,
+  onSave,
+}: {
+  value: string;
+  placeholder: string;
+  onSave: (value: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [editVal, setEditVal] = useState(value);
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing && ref.current) {
+      ref.current.focus();
+      ref.current.select();
+    }
+  }, [editing]);
+
+  const save = () => {
+    const trimmed = editVal.trim();
+    if (trimmed !== value) onSave(trimmed);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={ref}
+        value={editVal}
+        onChange={(e) => setEditVal(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") save();
+          if (e.key === "Escape") setEditing(false);
+        }}
+        placeholder={placeholder}
+        className="rounded border border-blue-300 px-1.5 py-0.5 text-xs text-zinc-800 focus:outline-none"
+      />
+    );
+  }
+
+  return (
+    <button
+      onClick={() => { setEditing(true); setEditVal(value); }}
+      className="text-xs text-zinc-500 hover:text-blue-600 hover:underline"
+      title={`${placeholder}を編集`}
+    >
+      {value || <span className="text-zinc-300">{placeholder}</span>}
+    </button>
+  );
+}
+
+// ========================================
+// History Field (部門・雇用形態: 履歴付き編集)
+// ========================================
+function HistoryField({
+  emp,
+  months,
+  field,
+  placeholder,
+  onSave,
+}: {
+  emp: EmployeeRow;
+  months: string[];
+  field: string;
+  placeholder: string;
+  onSave: (emp: EmployeeRow, field: string, value: string, fromMonth?: string) => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [newVal, setNewVal] = useState("");
+  const [fromMonth, setFromMonth] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (adding && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [adding]);
+
+  // 月ごとの値から履歴を構築（値が変わったポイントを検出）
+  const sortedMonths = [...months].filter((m) => emp.months[m]).sort();
+  const history: { value: string; from: string }[] = [];
+  for (const m of sortedMonths) {
+    const val = (emp.months[m] as unknown as Record<string, string>)[field] || "";
+    if (history.length === 0 || history[history.length - 1].value !== val) {
+      history.push({ value: val, from: m });
+    }
+  }
+
+  const save = () => {
+    const trimmed = newVal.trim();
+    if (!trimmed || !fromMonth) return;
+    onSave(emp, field, trimmed, fromMonth);
+    setAdding(false);
+    setNewVal("");
+    setFromMonth("");
+  };
+
+  return (
+    <span className="inline-flex items-center gap-1 flex-wrap">
+      {history.map((h, i) => (
+        <span key={i} className="text-xs text-zinc-500">
+          {i > 0 && <span className="text-zinc-300 mr-1">→</span>}
+          {h.value || <span className="text-zinc-300">{placeholder}</span>}
+          {i > 0 && (
+            <span className="text-[10px] text-zinc-400 ml-0.5">
+              ({parseInt(h.from.split("-")[1])}月~)
+            </span>
+          )}
+        </span>
+      ))}
+      {adding ? (
+        <span className="inline-flex items-center gap-1">
+          <span className="text-zinc-300 text-xs">→</span>
+          <input
+            ref={inputRef}
+            value={newVal}
+            onChange={(e) => setNewVal(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") save();
+              if (e.key === "Escape") { setAdding(false); setNewVal(""); }
+            }}
+            placeholder={placeholder}
+            className="rounded border border-blue-300 px-1.5 py-0.5 text-xs text-zinc-800 w-28 focus:outline-none"
+          />
+          <select
+            value={fromMonth}
+            onChange={(e) => setFromMonth(e.target.value)}
+            className="rounded border border-blue-300 px-1 py-0.5 text-[10px] text-zinc-600"
+          >
+            <option value="">いつから</option>
+            {sortedMonths.map((m) => (
+              <option key={m} value={m}>{parseInt(m.split("-")[1])}月</option>
+            ))}
+          </select>
+          <button
+            onClick={save}
+            disabled={!newVal.trim() || !fromMonth}
+            className="text-[10px] text-blue-600 hover:text-blue-800 font-medium disabled:opacity-30"
+          >
+            OK
+          </button>
+          <button
+            onClick={() => { setAdding(false); setNewVal(""); }}
+            className="text-[10px] text-zinc-400 hover:text-zinc-600"
+          >
+            ×
+          </button>
+        </span>
+      ) : (
+        <button
+          onClick={() => setAdding(true)}
+          className="text-[10px] text-blue-500 hover:text-blue-700 ml-0.5"
+          title={`${placeholder}の変更を追加`}
+        >
+          +変更
+        </button>
+      )}
+    </span>
+  );
+}
+
+// ========================================
 // Detail Modal (全月横並び台帳)
 // ========================================
 function DetailModal({
@@ -1183,14 +2101,22 @@ function DetailModal({
   swh,
   onSave,
   onSaveEmployeeMemo,
+  onSaveConversionDate,
   onClose,
+  allowanceNames,
+  onSaveAllowanceName,
+  onSaveEmployeeField,
 }: {
   emp: EmployeeRow;
   months: string[];
   swh: number;
   onSave: (docId: string, field: string, value: number | boolean | string) => void;
   onSaveEmployeeMemo: (emp: EmployeeRow, value: string) => void;
+  onSaveConversionDate: (emp: EmployeeRow, value: string) => void;
   onClose: () => void;
+  allowanceNames: Record<string, string>;
+  onSaveAllowanceName: (nameField: string, value: string) => void;
+  onSaveEmployeeField: (emp: EmployeeRow, field: string, value: string, fromMonth?: string) => void;
 }) {
   const yearMonths = getTwelveMonths(months);
 
@@ -1205,9 +2131,15 @@ function DetailModal({
           <div className="flex items-start justify-between">
             <div>
               <h2 className="text-base font-semibold text-zinc-900">{emp.name}</h2>
-              <div className="text-xs text-zinc-500 mt-0.5">
-                {emp.employeeNumber} / {emp.branchName} / {emp.employmentType}
-                {emp.hireDate && ` / 入社${emp.hireDate}`}
+              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                <InlineEditField value={emp.employeeNumber} placeholder="社員番号" onSave={(v) => onSaveEmployeeField(emp, "employeeNumber", v)} />
+                <span className="text-zinc-300">/</span>
+                <HistoryField emp={emp} months={months} field="branchName" placeholder="部門" onSave={onSaveEmployeeField} />
+                <span className="text-zinc-300">/</span>
+                <HistoryField emp={emp} months={months} field="department" placeholder="所属" onSave={onSaveEmployeeField} />
+                <span className="text-zinc-300">/</span>
+                <HistoryField emp={emp} months={months} field="employmentType" placeholder="雇用形態" onSave={onSaveEmployeeField} />
+                {emp.hireDate && <span className="text-xs text-zinc-400">/ 入社{emp.hireDate}</span>}
               </div>
             </div>
             <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 text-xl leading-none">×</button>
@@ -1219,6 +2151,13 @@ function DetailModal({
                 return lm ? emp.months[lm].employeeMemo : "";
               })()}
               onSave={(v) => onSaveEmployeeMemo(emp, v)}
+            />
+            <ConversionDateCell
+              initial={(() => {
+                const lm = [...months].reverse().find((m) => emp.months[m]);
+                return lm ? emp.months[lm].conversionDate : "";
+              })()}
+              onSave={(v) => onSaveConversionDate(emp, v)}
             />
           </div>
         </div>
@@ -1264,64 +2203,33 @@ function DetailModal({
                   );
                 })}
               </tr>
-              {/* 手当1 */}
-              <DetailRowWithName
-                defaultName="手当1"
-                months={yearMonths}
-                emp={emp}
-                nameField="allowance1Name"
-                valueField="allowance1"
-                onSave={onSave}
-              />
-              {/* 手当2 */}
-              <DetailRowWithName
-                defaultName="手当2"
-                months={yearMonths}
-                emp={emp}
-                nameField="allowance2Name"
-                valueField="allowance2"
-                onSave={onSave}
-              />
-              {/* 手当3 */}
-              <DetailRowWithName
-                defaultName="手当3"
-                months={yearMonths}
-                emp={emp}
-                nameField="allowance3Name"
-                valueField="allowance3"
-                onSave={onSave}
-              />
-              {/* 手当4 */}
-              <DetailRowWithName
-                defaultName="手当4"
-                months={yearMonths}
-                emp={emp}
-                nameField="allowance4Name"
-                valueField="allowance4"
-                onSave={onSave}
-              />
-              {/* 手当5 */}
-              <DetailRowWithName
-                defaultName="手当5"
-                months={yearMonths}
-                emp={emp}
-                nameField="allowance5Name"
-                valueField="allowance5"
-                onSave={onSave}
-              />
-              {/* 手当6 */}
-              <DetailRowWithName
-                defaultName="手当6"
-                months={yearMonths}
-                emp={emp}
-                nameField="allowance6Name"
-                valueField="allowance6"
-                onSave={onSave}
-              />
+              {/* 手当1-6 */}
+              {([
+                ["allowance1", "allowance1Name", "手当1"],
+                ["allowance2", "allowance2Name", "手当2"],
+                ["allowance3", "allowance3Name", "手当3"],
+                ["allowance4", "allowance4Name", "手当4"],
+                ["allowance5", "allowance5Name", "手当5"],
+                ["allowance6", "allowance6Name", "手当6"],
+              ] as const).map(([valueField, nameField, defaultName]) => (
+                <DetailRowWithName
+                  key={valueField}
+                  defaultName={defaultName}
+                  currentName={allowanceNames[nameField] || ""}
+                  months={yearMonths}
+                  emp={emp}
+                  nameField={nameField}
+                  valueField={valueField}
+                  onSave={onSave}
+                  onSaveLabel={onSaveAllowanceName}
+                />
+              ))}
               {/* みなし残業手当 */}
               <DetailRow label="みなし残業" months={yearMonths} emp={emp} field="deemedOvertimePay" onSave={onSave} />
               {/* 住民税 */}
               <DetailRow label="住民税" months={yearMonths} emp={emp} field="residentTax" onSave={onSave} />
+              {/* 賞与 */}
+              <DetailRow label="賞与" months={yearMonths} emp={emp} field="bonus" onSave={onSave} />
               {/* 社保等級 */}
               <DetailRowText label="社保等級" months={yearMonths} emp={emp} field="socialInsuranceGrade" onSave={onSave} />
               {/* 単価 (編集可能、0なら自動計算) */}
@@ -1452,27 +2360,27 @@ function DetailRowText({
   );
 }
 
-// 手当行（名前変更可能 + 金額入力）
+// 手当行（名前変更可能 + 金額入力）— 名前は会社レベルで管理
 function DetailRowWithName({
   defaultName,
+  currentName: companyName,
   months,
   emp,
   nameField,
   valueField,
   onSave,
+  onSaveLabel,
 }: {
   defaultName: string;
+  currentName: string;
   months: string[];
   emp: EmployeeRow;
   nameField: string;
   valueField: string;
   onSave: (docId: string, field: string, value: number | string) => void;
+  onSaveLabel: (nameField: string, value: string) => void;
 }) {
-  // 最新月の手当名を取得
-  const latestMonth = [...months].reverse().find((m) => emp.months[m]);
-  const currentName = latestMonth
-    ? (emp.months[latestMonth] as unknown as Record<string, string>)[nameField] || defaultName
-    : defaultName;
+  const currentName = companyName || defaultName;
 
   const [labelEditing, setLabelEditing] = useState(false);
   const [labelVal, setLabelVal] = useState(currentName);
@@ -1487,11 +2395,7 @@ function DetailRowWithName({
 
   const saveLabel = () => {
     const trimmed = labelVal.trim() || defaultName;
-    // 全月の手当名を更新
-    for (const m of months) {
-      const data = emp.months[m];
-      if (data) onSave(data.docId, nameField, trimmed);
-    }
+    onSaveLabel(nameField, trimmed);
     setLabelEditing(false);
   };
 
