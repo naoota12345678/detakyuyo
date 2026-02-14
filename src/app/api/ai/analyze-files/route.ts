@@ -114,41 +114,33 @@ export async function POST(request: NextRequest) {
           const sheet = workbook.Sheets[sheetName];
           const ref = sheet["!ref"];
           if (!ref) continue;
-          const range = XLSX.utils.decode_range(ref);
-          const totalRows = range.e.r - range.s.r + 1;
-          const totalCols = range.e.c - range.s.c + 1;
 
-          // Strategy: convert to JSON rows with explicit column→value mapping
-          // This is much more accurate for AI than CSV/tab-separated
+          // Parse with raw values for numbers, formatted for display
           const jsonRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
-            raw: false,   // Use formatted display values
-            defval: "",   // Empty string for missing cells
+            raw: true,    // Get raw numeric values (not formatted strings)
+            defval: null,
           });
 
           if (jsonRows.length > 0 && Object.keys(jsonRows[0]).length > 1) {
-            // JSON conversion succeeded with headers
+            // Convert each row to explicit key:value record
             const headers = Object.keys(jsonRows[0]);
-            // Build markdown table for clear column association
-            const mdLines: string[] = [];
-            mdLines.push(`| ${headers.join(" | ")} |`);
-            mdLines.push(`| ${headers.map(() => "---").join(" | ")} |`);
+            const records: string[] = [];
             for (const row of jsonRows) {
-              const vals = headers.map((h) => {
+              const pairs: string[] = [];
+              for (const h of headers) {
                 const v = row[h];
-                return v !== undefined && v !== null && v !== "" ? String(v) : "";
-              });
-              mdLines.push(`| ${vals.join(" | ")} |`);
+                if (v === null || v === undefined || v === "") continue;
+                pairs.push(`${h}: ${v}`);
+              }
+              if (pairs.length > 0) {
+                records.push(`{${pairs.join(", ")}}`);
+              }
             }
-            texts.push(`【シート: ${sheetName}】（${totalRows}行×${totalCols}列、データ${jsonRows.length}行）\n${mdLines.join("\n")}`);
+            texts.push(`【シート: ${sheetName}】（${jsonRows.length}件のデータ、列: ${headers.join(", ")}）\n${records.join("\n")}`);
           } else {
-            // Fallback: cell-by-cell with row numbers (for complex layouts)
+            // Fallback for complex layouts: cell-by-cell
+            const range = XLSX.utils.decode_range(ref);
             const rows: string[] = [];
-            const colLetters: string[] = [];
-            for (let c = range.s.c; c <= range.e.c; c++) {
-              colLetters.push(XLSX.utils.encode_col(c));
-            }
-            rows.push(`行\t${colLetters.join("\t")}`);
-
             for (let r = range.s.r; r <= range.e.r; r++) {
               const cells: string[] = [];
               let hasValue = false;
@@ -156,27 +148,19 @@ export async function POST(request: NextRequest) {
                 const addr = XLSX.utils.encode_cell({ r, c });
                 const cell = sheet[addr];
                 if (cell) {
-                  const val = cell.w !== undefined ? cell.w : (cell.v !== undefined ? String(cell.v) : "");
-                  cells.push(val);
-                  if (val) hasValue = true;
-                } else {
-                  cells.push("");
+                  const col = XLSX.utils.encode_col(c);
+                  const val = cell.v !== undefined ? String(cell.v) : "";
+                  if (val) {
+                    cells.push(`${col}${r + 1}=${val}`);
+                    hasValue = true;
+                  }
                 }
               }
               if (hasValue) {
-                rows.push(`${r + 1}\t${cells.join("\t")}`);
+                rows.push(cells.join(", "));
               }
             }
-
-            const merges = sheet["!merges"] || [];
-            let mergeInfo = "";
-            if (merges.length > 0) {
-              const mergeDescs = merges.slice(0, 50).map((m: XLSX.Range) =>
-                `${XLSX.utils.encode_cell(m.s)}:${XLSX.utils.encode_cell(m.e)}`
-              );
-              mergeInfo = `\n結合セル: ${mergeDescs.join(", ")}`;
-            }
-            texts.push(`【シート: ${sheetName}】（${totalRows}行×${totalCols}列）${mergeInfo}\n${rows.join("\n")}`);
+            texts.push(`【シート: ${sheetName}】\n${rows.join("\n")}`);
           }
         }
         contentBlocks.push({
