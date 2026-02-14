@@ -1085,6 +1085,24 @@ function CompanyPageContent() {
                   <div className="text-sm text-zinc-800 whitespace-pre-wrap leading-relaxed prose prose-sm max-w-none">
                     {aiFileResult}
                   </div>
+                  <div className="mt-3 flex gap-2">
+                    <input
+                      type="text"
+                      value={aiInstruction}
+                      onChange={(e) => setAiInstruction(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") handleAiInstruction(); }}
+                      placeholder="返信...（例: はい、反映して）"
+                      className="flex-1 rounded-md border border-purple-200 bg-white px-3 py-1.5 text-sm text-zinc-800 placeholder-zinc-400 focus:border-purple-400 focus:outline-none"
+                      disabled={aiLoading}
+                    />
+                    <button
+                      onClick={handleAiInstruction}
+                      disabled={aiLoading || !aiInstruction.trim()}
+                      className="shrink-0 rounded-md bg-purple-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+                    >
+                      {aiLoading ? "分析中..." : "送信"}
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
