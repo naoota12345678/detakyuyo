@@ -107,8 +107,52 @@ export async function POST(request: NextRequest) {
         const workbook = XLSX.read(new Uint8Array(arrayBuffer), { type: "array" });
         const texts: string[] = [];
         for (const sheetName of workbook.SheetNames) {
-          const csv = XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName]);
-          texts.push(`【シート: ${sheetName}】\n${csv}`);
+          const sheet = workbook.Sheets[sheetName];
+          const range = XLSX.utils.decode_range(sheet["!ref"] || "A1");
+
+          // Build structured output with cell references for better AI reading
+          const rows: string[] = [];
+          // Header: column letters
+          const colLetters: string[] = [];
+          for (let c = range.s.c; c <= range.e.c; c++) {
+            colLetters.push(XLSX.utils.encode_col(c));
+          }
+          rows.push(`行\t${colLetters.join("\t")}`);
+
+          for (let r = range.s.r; r <= range.e.r; r++) {
+            const cells: string[] = [];
+            let hasValue = false;
+            for (let c = range.s.c; c <= range.e.c; c++) {
+              const addr = XLSX.utils.encode_cell({ r, c });
+              const cell = sheet[addr];
+              if (cell) {
+                // Use formatted value (w) if available, otherwise use value (v)
+                const val = cell.w !== undefined ? cell.w : (cell.v !== undefined ? String(cell.v) : "");
+                cells.push(val);
+                if (val) hasValue = true;
+              } else {
+                cells.push("");
+              }
+            }
+            // Skip completely empty rows
+            if (hasValue) {
+              rows.push(`${r + 1}\t${cells.join("\t")}`);
+            }
+          }
+
+          // Include merge info for AI context
+          const merges = sheet["!merges"] || [];
+          let mergeInfo = "";
+          if (merges.length > 0) {
+            const mergeDescs = merges.slice(0, 50).map((m: XLSX.Range) => {
+              const s = XLSX.utils.encode_cell(m.s);
+              const e = XLSX.utils.encode_cell(m.e);
+              return `${s}:${e}`;
+            });
+            mergeInfo = `\n結合セル: ${mergeDescs.join(", ")}`;
+          }
+
+          texts.push(`【シート: ${sheetName}】（${range.e.r + 1}行×${range.e.c + 1}列）${mergeInfo}\n${rows.join("\n")}`);
         }
         contentBlocks.push({
           type: "text",
