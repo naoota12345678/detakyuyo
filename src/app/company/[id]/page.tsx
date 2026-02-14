@@ -152,6 +152,7 @@ function CompanyPageContent() {
   const [loadingData, setLoadingData] = useState(true);
   const [detailEmployee, setDetailEmployee] = useState<EmployeeRow | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("employeeNumber");
+  const [searchQuery, setSearchQuery] = useState("");
   const [completing, setCompleting] = useState(false);
   const [bonusMonth, setBonusMonth] = useState<string | null>(null);
   const [slackMessages, setSlackMessages] = useState<SlackMessage[]>([]);
@@ -838,8 +839,13 @@ function CompanyPageContent() {
     if (sortKey === "hireDate") return (a.hireDate || "9999").localeCompare(b.hireDate || "9999");
     return a.employeeNumber.localeCompare(b.employeeNumber);
   };
-  const activeEmployees = employees.filter((e) => e.status !== "退社").sort(sortFn);
-  const retiredEmployees = employees.filter((e) => e.status === "退社").sort(sortFn);
+  const searchFilter = (e: EmployeeRow) => {
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    return e.name.toLowerCase().includes(q) || e.employeeNumber.toLowerCase().includes(q);
+  };
+  const activeEmployees = employees.filter((e) => e.status !== "退社").filter(searchFilter).sort(sortFn);
+  const retiredEmployees = employees.filter((e) => e.status === "退社").filter(searchFilter).sort(sortFn);
   const activeCount = activeEmployees.length;
 
   // 附番重複チェック（同一会社内）
@@ -1668,18 +1674,37 @@ function CompanyPageContent() {
               )}
             </div>
 
-            {/* ソートボタン + 完了ボタン */}
+            {/* ソート・検索 + 完了ボタン */}
             <div className="mb-2 flex items-center justify-between">
-              <div className="flex gap-1">
-                {([["employeeNumber", "社員番号"], ["name", "名前"], ["hireDate", "入社日"]] as const).map(([key, label]) => (
-                  <button
-                    key={key}
-                    onClick={() => setSortKey(key)}
-                    className={`px-2.5 py-1 text-xs rounded border ${sortKey === key ? "bg-blue-600 text-white border-blue-600" : "bg-white text-zinc-600 border-zinc-300 hover:bg-zinc-50"}`}
-                  >
-                    {label}順
-                  </button>
-                ))}
+              <div className="flex items-center gap-2">
+                <div className="flex gap-1">
+                  {([["employeeNumber", "社員番号"], ["name", "名前"], ["hireDate", "入社日"]] as const).map(([key, label]) => (
+                    <button
+                      key={key}
+                      onClick={() => setSortKey(key)}
+                      className={`px-2.5 py-1 text-xs rounded border ${sortKey === key ? "bg-blue-600 text-white border-blue-600" : "bg-white text-zinc-600 border-zinc-300 hover:bg-zinc-50"}`}
+                    >
+                      {label}順
+                    </button>
+                  ))}
+                </div>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="名前・番号で検索"
+                    className="w-36 rounded border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 placeholder-zinc-400 focus:border-blue-400 focus:outline-none"
+                  />
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery("")}
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 text-xs"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 {bonusMonth ? (
