@@ -713,26 +713,38 @@ function CompanyPageContent() {
     }
   };
 
-  // ファイル分析のAI提案を反映
+  // ファイル分析のAI提案を反映（同値はスキップ）
   const handleAiFileApply = async () => {
     if (!aiFileResult?.changes || aiFileResult.changes.length === 0) return;
     setAiFileApplying(true);
     try {
+      let applied = 0;
       for (const change of aiFileResult.changes) {
         const targetEmp = employees.find((e) => e.name === change.employeeName);
         if (!targetEmp) continue;
 
         if (change.field === "employeeMemo") {
           await saveEmployeeMemo(targetEmp, String(change.value));
+          applied++;
         } else if (change.months.length === 0) {
           for (const m of Object.keys(targetEmp.months)) {
             const data = targetEmp.months[m];
-            if (data) await saveField(data.docId, change.field, change.value);
+            if (!data) continue;
+            const currentVal = (data as unknown as Record<string, number | string>)[change.field];
+            if (typeof change.value === "number" && change.value === currentVal) continue;
+            if (typeof change.value !== "number" && String(change.value) === String(currentVal ?? "")) continue;
+            await saveField(data.docId, change.field, change.value);
+            applied++;
           }
         } else {
           for (const month of change.months) {
             const data = targetEmp.months[month];
-            if (data) await saveField(data.docId, change.field, change.value);
+            if (!data) continue;
+            const currentVal = (data as unknown as Record<string, number | string>)[change.field];
+            if (typeof change.value === "number" && change.value === currentVal) continue;
+            if (typeof change.value !== "number" && String(change.value) === String(currentVal ?? "")) continue;
+            await saveField(data.docId, change.field, change.value);
+            applied++;
           }
         }
       }
@@ -1154,69 +1166,106 @@ function CompanyPageContent() {
                     {aiFileResult.text}
                   </div>
                   {/* 変更提案 */}
-                  {aiFileResult.changes && aiFileResult.changes.length > 0 && (
-                    <div className="mt-3 rounded-md border border-green-200 bg-green-50 p-3">
-                      <p className="text-sm font-medium text-green-800 mb-2">変更提案（{aiFileResult.changes.length}件）</p>
-                      <div className="space-y-1">
-                        {aiFileResult.changes.map((change, i) => {
-                          const fieldNames: Record<string, string> = {
-                            baseSalary: "基本給", commutingAllowance: "通勤手当",
-                            allowance1: "手当1", allowance2: "手当2", allowance3: "手当3",
-                            allowance4: "手当4", allowance5: "手当5", allowance6: "手当6",
-                            deemedOvertimePay: "みなし残業手当", deductions: "控除",
-                            residentTax: "住民税", unitPrice: "単価",
-                            socialInsuranceGrade: "社保等級", overtimeHours: "残業時間", overtimePay: "残業代",
-                            bonus: "賞与", memo: "月メモ", employeeMemo: "人メモ",
-                          };
-                          const targetEmp = employees.find((e) => e.name === change.employeeName);
-                          let currentVal: string | number | null = null;
-                          if (change.months.length > 0) {
-                            const data = targetEmp?.months[change.months[0]];
-                            if (data) {
-                              currentVal = (data as unknown as Record<string, number | string>)[change.field] ?? null;
+                  {(() => {
+                    if (!aiFileResult.changes || aiFileResult.changes.length === 0) return null;
+                    // Filter out changes where value is the same as current
+                    const filteredChanges = aiFileResult.changes.filter((change) => {
+                      const targetEmp = employees.find((e) => e.name === change.employeeName);
+                      if (!targetEmp || change.months.length === 0) return true;
+                      const data = targetEmp.months[change.months[0]];
+                      if (!data) return true;
+                      const currentVal = (data as unknown as Record<string, number | string>)[change.field];
+                      // Compare numerically for number fields
+                      if (typeof change.value === "number" && typeof currentVal === "number") {
+                        return change.value !== currentVal;
+                      }
+                      return String(change.value) !== String(currentVal ?? "");
+                    });
+                    if (filteredChanges.length === 0) return null;
+                    const baseFieldNames: Record<string, string> = {
+                      baseSalary: "基本給", commutingAllowance: "通勤手当",
+                      deemedOvertimePay: "みなし残業手当", deductions: "控除",
+                      residentTax: "住民税", unitPrice: "単価",
+                      socialInsuranceGrade: "社保等級", overtimeHours: "残業時間", overtimePay: "残業代",
+                      bonus: "賞与", memo: "月メモ", employeeMemo: "人メモ",
+                    };
+                    // Resolve actual allowance names from employee data
+                    const getAllowanceName = (field: string, emp: EmployeeRow | undefined) => {
+                      if (!field.startsWith("allowance") || field.endsWith("Name")) return baseFieldNames[field] || field;
+                      const num = field.replace("allowance", "");
+                      const nameField = `allowance${num}Name` as keyof MonthlyData;
+                      if (emp) {
+                        const latestMonth = [...months].reverse().find((m) => emp.months[m]);
+                        if (latestMonth) {
+                          const name = emp.months[latestMonth][nameField];
+                          if (name && typeof name === "string") return name;
+                        }
+                      }
+                      return `手当${num}`;
+                    };
+                    return (
+                      <div className="mt-3 rounded-md border border-green-200 bg-green-50 p-3">
+                        <p className="text-sm font-medium text-green-800 mb-2">
+                          変更提案（{filteredChanges.length}件）
+                          {filteredChanges.length < aiFileResult.changes.length && (
+                            <span className="text-[10px] text-zinc-500 font-normal ml-1">
+                              ※同値{aiFileResult.changes.length - filteredChanges.length}件を除外
+                            </span>
+                          )}
+                        </p>
+                        <div className="space-y-1">
+                          {filteredChanges.map((change, i) => {
+                            const targetEmp = employees.find((e) => e.name === change.employeeName);
+                            const fieldLabel = getAllowanceName(change.field, targetEmp);
+                            let currentVal: string | number | null = null;
+                            if (change.months.length > 0) {
+                              const data = targetEmp?.months[change.months[0]];
+                              if (data) {
+                                currentVal = (data as unknown as Record<string, number | string>)[change.field] ?? null;
+                              }
                             }
-                          }
-                          return (
-                            <div key={i} className="text-xs text-green-700 flex items-start gap-2">
-                              <span className="font-medium shrink-0">{change.employeeName}</span>
-                              <span className="shrink-0">{fieldNames[change.field] || change.field}:</span>
-                              {currentVal != null && (
-                                <>
-                                  <span className="text-zinc-500">
-                                    {typeof currentVal === "number" ? currentVal.toLocaleString() : currentVal}
-                                  </span>
-                                  <span className="text-zinc-400">&rarr;</span>
-                                </>
-                              )}
-                              <span className="font-bold">
-                                {typeof change.value === "number" ? change.value.toLocaleString() : change.value}
-                              </span>
-                              {change.months.length > 0 && (
-                                <span className="text-[10px] text-zinc-500 shrink-0">
-                                  ({change.months.length === 1 ? change.months[0] : `${change.months[0]}〜${change.months[change.months.length - 1]}`})
+                            return (
+                              <div key={i} className="text-xs text-green-700 flex items-start gap-2">
+                                <span className="font-medium shrink-0">{change.employeeName}</span>
+                                <span className="shrink-0">{fieldLabel}:</span>
+                                {currentVal != null && (
+                                  <>
+                                    <span className="text-zinc-500">
+                                      {typeof currentVal === "number" ? currentVal.toLocaleString() : currentVal}
+                                    </span>
+                                    <span className="text-zinc-400">&rarr;</span>
+                                  </>
+                                )}
+                                <span className="font-bold">
+                                  {typeof change.value === "number" ? change.value.toLocaleString() : change.value}
                                 </span>
-                              )}
-                            </div>
-                          );
-                        })}
+                                {change.months.length > 0 && (
+                                  <span className="text-[10px] text-zinc-500 shrink-0">
+                                    ({change.months.length === 1 ? change.months[0] : `${change.months[0]}〜${change.months[change.months.length - 1]}`})
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="flex gap-2 mt-3">
+                          <button
+                            onClick={handleAiFileApply}
+                            disabled={aiFileApplying}
+                            className="rounded-md bg-green-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                          >
+                            {aiFileApplying ? "反映中..." : "反映する"}
+                          </button>
+                          <button
+                            onClick={() => setAiFileResult((prev) => prev ? { ...prev, changes: undefined } : null)}
+                            className="rounded-md border border-zinc-300 bg-white px-4 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50"
+                          >
+                            提案を破棄
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex gap-2 mt-3">
-                        <button
-                          onClick={handleAiFileApply}
-                          disabled={aiFileApplying}
-                          className="rounded-md bg-green-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
-                        >
-                          {aiFileApplying ? "反映中..." : "反映する"}
-                        </button>
-                        <button
-                          onClick={() => setAiFileResult((prev) => prev ? { ...prev, changes: undefined } : null)}
-                          className="rounded-md border border-zinc-300 bg-white px-4 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50"
-                        >
-                          提案を破棄
-                        </button>
-                      </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                   <div className="mt-3 flex gap-2">
                     <input
                       type="text"
