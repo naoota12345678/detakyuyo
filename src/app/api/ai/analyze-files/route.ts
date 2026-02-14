@@ -108,51 +108,72 @@ export async function POST(request: NextRequest) {
         const texts: string[] = [];
         for (const sheetName of workbook.SheetNames) {
           const sheet = workbook.Sheets[sheetName];
-          const range = XLSX.utils.decode_range(sheet["!ref"] || "A1");
+          const ref = sheet["!ref"];
+          if (!ref) continue;
+          const range = XLSX.utils.decode_range(ref);
+          const totalRows = range.e.r - range.s.r + 1;
+          const totalCols = range.e.c - range.s.c + 1;
 
-          // Build structured output with cell references for better AI reading
-          const rows: string[] = [];
-          // Header: column letters
-          const colLetters: string[] = [];
-          for (let c = range.s.c; c <= range.e.c; c++) {
-            colLetters.push(XLSX.utils.encode_col(c));
-          }
-          rows.push(`行\t${colLetters.join("\t")}`);
+          // Strategy: convert to JSON rows with explicit column→value mapping
+          // This is much more accurate for AI than CSV/tab-separated
+          const jsonRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+            raw: false,   // Use formatted display values
+            defval: "",   // Empty string for missing cells
+          });
 
-          for (let r = range.s.r; r <= range.e.r; r++) {
-            const cells: string[] = [];
-            let hasValue = false;
+          if (jsonRows.length > 0 && Object.keys(jsonRows[0]).length > 1) {
+            // JSON conversion succeeded with headers
+            const headers = Object.keys(jsonRows[0]);
+            // Build markdown table for clear column association
+            const mdLines: string[] = [];
+            mdLines.push(`| ${headers.join(" | ")} |`);
+            mdLines.push(`| ${headers.map(() => "---").join(" | ")} |`);
+            for (const row of jsonRows) {
+              const vals = headers.map((h) => {
+                const v = row[h];
+                return v !== undefined && v !== null && v !== "" ? String(v) : "";
+              });
+              mdLines.push(`| ${vals.join(" | ")} |`);
+            }
+            texts.push(`【シート: ${sheetName}】（${totalRows}行×${totalCols}列、データ${jsonRows.length}行）\n${mdLines.join("\n")}`);
+          } else {
+            // Fallback: cell-by-cell with row numbers (for complex layouts)
+            const rows: string[] = [];
+            const colLetters: string[] = [];
             for (let c = range.s.c; c <= range.e.c; c++) {
-              const addr = XLSX.utils.encode_cell({ r, c });
-              const cell = sheet[addr];
-              if (cell) {
-                // Use formatted value (w) if available, otherwise use value (v)
-                const val = cell.w !== undefined ? cell.w : (cell.v !== undefined ? String(cell.v) : "");
-                cells.push(val);
-                if (val) hasValue = true;
-              } else {
-                cells.push("");
+              colLetters.push(XLSX.utils.encode_col(c));
+            }
+            rows.push(`行\t${colLetters.join("\t")}`);
+
+            for (let r = range.s.r; r <= range.e.r; r++) {
+              const cells: string[] = [];
+              let hasValue = false;
+              for (let c = range.s.c; c <= range.e.c; c++) {
+                const addr = XLSX.utils.encode_cell({ r, c });
+                const cell = sheet[addr];
+                if (cell) {
+                  const val = cell.w !== undefined ? cell.w : (cell.v !== undefined ? String(cell.v) : "");
+                  cells.push(val);
+                  if (val) hasValue = true;
+                } else {
+                  cells.push("");
+                }
+              }
+              if (hasValue) {
+                rows.push(`${r + 1}\t${cells.join("\t")}`);
               }
             }
-            // Skip completely empty rows
-            if (hasValue) {
-              rows.push(`${r + 1}\t${cells.join("\t")}`);
+
+            const merges = sheet["!merges"] || [];
+            let mergeInfo = "";
+            if (merges.length > 0) {
+              const mergeDescs = merges.slice(0, 50).map((m: XLSX.Range) =>
+                `${XLSX.utils.encode_cell(m.s)}:${XLSX.utils.encode_cell(m.e)}`
+              );
+              mergeInfo = `\n結合セル: ${mergeDescs.join(", ")}`;
             }
+            texts.push(`【シート: ${sheetName}】（${totalRows}行×${totalCols}列）${mergeInfo}\n${rows.join("\n")}`);
           }
-
-          // Include merge info for AI context
-          const merges = sheet["!merges"] || [];
-          let mergeInfo = "";
-          if (merges.length > 0) {
-            const mergeDescs = merges.slice(0, 50).map((m: XLSX.Range) => {
-              const s = XLSX.utils.encode_cell(m.s);
-              const e = XLSX.utils.encode_cell(m.e);
-              return `${s}:${e}`;
-            });
-            mergeInfo = `\n結合セル: ${mergeDescs.join(", ")}`;
-          }
-
-          texts.push(`【シート: ${sheetName}】（${range.e.r + 1}行×${range.e.c + 1}列）${mergeInfo}\n${rows.join("\n")}`);
         }
         contentBlocks.push({
           type: "text",
@@ -205,7 +226,9 @@ export async function POST(request: NextRequest) {
 ${employeeContext}
 
 ## ルール
-- 資料の内容を正確に読み取ってください
+- **数値の正確性が最重要**: 資料に記載された数値をそのまま正確に読み取ってください。推測や計算で値を作らないでください
+- 資料はマークダウンテーブルまたはタブ区切りで提供されます。各行の列名と値の対応を正確に読み取ってください
+- 値が不明・読み取れない場合は「不明」と回答し、推測値を返さないでください
 - 複数資料がある場合は比較・突合してください
 - 金額の不一致や差分があれば明確に指摘してください
 - 回答は日本語で簡潔に、表形式を活用してください
