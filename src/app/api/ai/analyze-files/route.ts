@@ -41,6 +41,7 @@ export async function POST(request: NextRequest) {
     const companyName = formData.get("companyName") as string;
     const month = formData.get("month") as string;
     const files = formData.getAll("files") as File[];
+    const previousAnalysis = formData.get("previousAnalysis") as string | null;
 
     if (!instruction) {
       return NextResponse.json({ error: "指示を入力してください" }, { status: 400 });
@@ -136,11 +137,13 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Add instruction
-    contentBlocks.push({
-      type: "text",
-      text: instruction,
-    });
+    // Add instruction (only for initial request, not follow-ups)
+    if (!previousAnalysis) {
+      contentBlocks.push({
+        type: "text",
+        text: instruction,
+      });
+    }
 
     const systemPrompt = `あなたは給与管理アシスタントです。
 ユーザーがアップロードした資料を分析し、指示に従って回答してください。
@@ -155,19 +158,73 @@ ${employeeContext}
 - 資料の内容を正確に読み取ってください
 - 複数資料がある場合は比較・突合してください
 - 金額の不一致や差分があれば明確に指摘してください
-- 回答は日本語で簡潔に、表形式を活用してください`;
+- 回答は日本語で簡潔に、表形式を活用してください
+
+## 変更提案
+資料から読み取った内容に基づいて、アプリのデータを更新すべき箇所がある場合は、
+分析テキストの最後に以下の形式でJSONブロックを出力してください。
+更新すべき箇所がない場合や、分析・比較のみの指示の場合はJSONブロックは不要です。
+
+\`\`\`changes
+[
+  { "employeeName": "従業員のフルネーム", "field": "フィールド名", "value": 数値またはテキスト, "months": ["${month || "YYYY-MM"}"] }
+]
+\`\`\`
+
+### 利用可能フィールド
+- baseSalary: 基本給
+- commutingAllowance: 通勤手当
+- allowance1〜allowance6: 手当1〜6
+- deemedOvertimePay: みなし残業手当
+- deductions: 控除
+- residentTax: 住民税
+- unitPrice: 単価
+- socialInsuranceGrade: 社保等級
+- overtimeHours: 残業時間
+- overtimePay: 残業代
+- bonus: 賞与
+- memo: 月メモ
+
+### 注意
+- 金額は数値で出力（「25万」→250000）
+- monthsは対象月の配列（通常は["${month || "YYYY-MM"}"]）
+- employeeNameはアプリ内データに一致するフルネームを使用
+- 資料に明確な値があり、アプリのデータと異なる場合のみ提案してください`;
 
     const client = new Anthropic({ apiKey });
+
+    // Build messages: multi-turn if following up on previous analysis
+    const messages: Anthropic.Messages.MessageParam[] = previousAnalysis
+      ? [
+          { role: "user", content: "添付資料を分析してください。" },
+          { role: "assistant", content: previousAnalysis },
+          { role: "user", content: instruction },
+        ]
+      : [{ role: "user", content: contentBlocks }];
+
     const message = await client.messages.create({
       model: "claude-sonnet-4-5-20250929",
       max_tokens: 4096,
       system: systemPrompt,
-      messages: [{ role: "user", content: contentBlocks }],
+      messages,
     });
 
     const text = message.content[0].type === "text" ? message.content[0].text : "";
 
-    return NextResponse.json({ success: true, analysis: text });
+    // Extract structured changes from ```changes ... ``` block
+    let changes: { employeeName: string; field: string; value: number | string; months: string[] }[] | undefined;
+    let analysisText = text;
+    const changesMatch = text.match(/```changes\s*\n([\s\S]*?)\n```/);
+    if (changesMatch) {
+      try {
+        changes = JSON.parse(changesMatch[1]);
+        analysisText = text.replace(/```changes\s*\n[\s\S]*?\n```/, "").trim();
+      } catch {
+        // JSON parse failed — keep as plain text
+      }
+    }
+
+    return NextResponse.json({ success: true, analysis: analysisText, changes });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "分析に失敗しました";
     console.error("Analyze files error:", error);

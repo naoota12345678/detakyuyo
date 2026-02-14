@@ -170,7 +170,11 @@ function CompanyPageContent() {
   const [aiApplying, setAiApplying] = useState(false);
   const [aiFiles, setAiFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [aiFileResult, setAiFileResult] = useState<string | null>(null);
+  const [aiFileResult, setAiFileResult] = useState<{
+    text: string;
+    changes?: { employeeName: string; field: string; value: number | string; months: string[] }[];
+  } | null>(null);
+  const [aiFileApplying, setAiFileApplying] = useState(false);
   // データチェック
   const [dcOpen, setDcOpen] = useState(false);
   const [dcFile, setDcFile] = useState<File | null>(null);
@@ -578,7 +582,7 @@ function CompanyPageContent() {
         if (!res.ok) {
           setAiResult({ success: false, error: result.error || "エラーが発生しました" });
         } else {
-          setAiFileResult(result.analysis);
+          setAiFileResult({ text: result.analysis, changes: result.changes });
         }
       } catch (e) {
         console.error("AI file analysis failed:", e);
@@ -675,6 +679,70 @@ function CompanyPageContent() {
       alert("反映に失敗しました");
     } finally {
       setAiApplying(false);
+    }
+  };
+
+  // ファイル分析結果へのフォローアップ（同じanalyze-files APIに会話継続で送信）
+  const handleAiFileFollowup = async () => {
+    if (!aiInstruction.trim() || aiLoading || !aiFileResult) return;
+    setAiLoading(true);
+    try {
+      const latestMonth = months.length > 0 ? months[months.length - 1] : "";
+      const formData = new FormData();
+      formData.append("instruction", aiInstruction);
+      formData.append("companyName", company?.name || "");
+      formData.append("month", latestMonth);
+      formData.append("previousAnalysis", aiFileResult.text);
+      // ファイルは再送信しない（前回の分析結果がコンテキストになる）
+      const res = await fetch("/api/ai/analyze-files", {
+        method: "POST",
+        body: formData,
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        setAiResult({ success: false, error: result.error || "エラーが発生しました" });
+      } else {
+        setAiFileResult({ text: result.analysis, changes: result.changes });
+      }
+    } catch (e) {
+      console.error("AI file followup failed:", e);
+      setAiResult({ success: false, error: "AI処理に失敗しました" });
+    } finally {
+      setAiLoading(false);
+      setAiInstruction("");
+    }
+  };
+
+  // ファイル分析のAI提案を反映
+  const handleAiFileApply = async () => {
+    if (!aiFileResult?.changes || aiFileResult.changes.length === 0) return;
+    setAiFileApplying(true);
+    try {
+      for (const change of aiFileResult.changes) {
+        const targetEmp = employees.find((e) => e.name === change.employeeName);
+        if (!targetEmp) continue;
+
+        if (change.field === "employeeMemo") {
+          await saveEmployeeMemo(targetEmp, String(change.value));
+        } else if (change.months.length === 0) {
+          for (const m of Object.keys(targetEmp.months)) {
+            const data = targetEmp.months[m];
+            if (data) await saveField(data.docId, change.field, change.value);
+          }
+        } else {
+          for (const month of change.months) {
+            const data = targetEmp.months[month];
+            if (data) await saveField(data.docId, change.field, change.value);
+          }
+        }
+      }
+      setAiFileResult(null);
+      setAiFiles([]);
+    } catch (e) {
+      console.error("AI file apply failed:", e);
+      alert("反映に失敗しました");
+    } finally {
+      setAiFileApplying(false);
     }
   };
 
@@ -1083,24 +1151,88 @@ function CompanyPageContent() {
                     </button>
                   </div>
                   <div className="text-sm text-zinc-800 whitespace-pre-wrap leading-relaxed prose prose-sm max-w-none">
-                    {aiFileResult}
+                    {aiFileResult.text}
                   </div>
+                  {/* 変更提案 */}
+                  {aiFileResult.changes && aiFileResult.changes.length > 0 && (
+                    <div className="mt-3 rounded-md border border-green-200 bg-green-50 p-3">
+                      <p className="text-sm font-medium text-green-800 mb-2">変更提案（{aiFileResult.changes.length}件）</p>
+                      <div className="space-y-1">
+                        {aiFileResult.changes.map((change, i) => {
+                          const fieldNames: Record<string, string> = {
+                            baseSalary: "基本給", commutingAllowance: "通勤手当",
+                            allowance1: "手当1", allowance2: "手当2", allowance3: "手当3",
+                            allowance4: "手当4", allowance5: "手当5", allowance6: "手当6",
+                            deemedOvertimePay: "みなし残業手当", deductions: "控除",
+                            residentTax: "住民税", unitPrice: "単価",
+                            socialInsuranceGrade: "社保等級", overtimeHours: "残業時間", overtimePay: "残業代",
+                            bonus: "賞与", memo: "月メモ", employeeMemo: "人メモ",
+                          };
+                          const targetEmp = employees.find((e) => e.name === change.employeeName);
+                          let currentVal: string | number | null = null;
+                          if (change.months.length > 0) {
+                            const data = targetEmp?.months[change.months[0]];
+                            if (data) {
+                              currentVal = (data as unknown as Record<string, number | string>)[change.field] ?? null;
+                            }
+                          }
+                          return (
+                            <div key={i} className="text-xs text-green-700 flex items-start gap-2">
+                              <span className="font-medium shrink-0">{change.employeeName}</span>
+                              <span className="shrink-0">{fieldNames[change.field] || change.field}:</span>
+                              {currentVal != null && (
+                                <>
+                                  <span className="text-zinc-500">
+                                    {typeof currentVal === "number" ? currentVal.toLocaleString() : currentVal}
+                                  </span>
+                                  <span className="text-zinc-400">&rarr;</span>
+                                </>
+                              )}
+                              <span className="font-bold">
+                                {typeof change.value === "number" ? change.value.toLocaleString() : change.value}
+                              </span>
+                              {change.months.length > 0 && (
+                                <span className="text-[10px] text-zinc-500 shrink-0">
+                                  ({change.months.length === 1 ? change.months[0] : `${change.months[0]}〜${change.months[change.months.length - 1]}`})
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="flex gap-2 mt-3">
+                        <button
+                          onClick={handleAiFileApply}
+                          disabled={aiFileApplying}
+                          className="rounded-md bg-green-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                        >
+                          {aiFileApplying ? "反映中..." : "反映する"}
+                        </button>
+                        <button
+                          onClick={() => setAiFileResult((prev) => prev ? { ...prev, changes: undefined } : null)}
+                          className="rounded-md border border-zinc-300 bg-white px-4 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50"
+                        >
+                          提案を破棄
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   <div className="mt-3 flex gap-2">
                     <input
                       type="text"
                       value={aiInstruction}
                       onChange={(e) => setAiInstruction(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") handleAiInstruction(); }}
-                      placeholder="返信...（例: はい、反映して）"
+                      onKeyDown={(e) => { if (e.key === "Enter") handleAiFileFollowup(); }}
+                      placeholder="返信...（例: 山田さんの基本給を反映して）"
                       className="flex-1 rounded-md border border-purple-200 bg-white px-3 py-1.5 text-sm text-zinc-800 placeholder-zinc-400 focus:border-purple-400 focus:outline-none"
                       disabled={aiLoading}
                     />
                     <button
-                      onClick={handleAiInstruction}
+                      onClick={handleAiFileFollowup}
                       disabled={aiLoading || !aiInstruction.trim()}
                       className="shrink-0 rounded-md bg-purple-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
                     >
-                      {aiLoading ? "分析中..." : "送信"}
+                      {aiLoading ? "処理中..." : "送信"}
                     </button>
                   </div>
                 </div>
