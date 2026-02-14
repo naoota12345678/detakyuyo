@@ -2,29 +2,25 @@ import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 
-function parsePrivateKey(key: string | undefined): string | undefined {
-  if (!key) return undefined;
-  // Try JSON parse first (handles double-quoted/escaped strings)
-  try {
-    const parsed = JSON.parse(key);
-    if (typeof parsed === "string") return parsed;
-  } catch {
-    // not JSON, continue
-  }
-  // Fall back to manual \n replacement
-  return key.replace(/\\n/g, "\n").trim();
+function getCredential() {
+  const base64 = process.env.FIREBASE_PRIVATE_KEY;
+  if (!base64) throw new Error("FIREBASE_PRIVATE_KEY is not set");
+
+  // Base64 → JSON文字列 → オブジェクト
+  const json = Buffer.from(base64, "base64").toString("utf-8");
+  const serviceAccount = JSON.parse(json);
+
+  return cert({
+    projectId: serviceAccount.project_id,
+    clientEmail: serviceAccount.client_email,
+    privateKey: serviceAccount.private_key,
+  });
 }
 
 const apps = getApps();
 
 if (apps.length === 0) {
-  initializeApp({
-    credential: cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: parsePrivateKey(process.env.FIREBASE_PRIVATE_KEY),
-    }),
-  });
+  initializeApp({ credential: getCredential() });
 }
 
 export const adminDb = getFirestore("detakyuyo");
