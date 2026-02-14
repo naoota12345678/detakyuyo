@@ -24,12 +24,16 @@ function buildEmployeeContext(docs: FirebaseFirestore.QueryDocumentSnapshot[], m
       residentTax: d.residentTax || 0,
       bonus: d.bonus || 0,
       unitPrice: d.unitPrice || 0,
+      commutingUnitPrice: d.commutingUnitPrice || 0,
       socialInsuranceGrade: d.socialInsuranceGrade || "",
     });
   }
   if (byName.size === 0) return "（当月のアプリデータなし）";
   const lines = Array.from(byName.entries()).map(
-    ([name, d]) => `${name}(${(d as Record<string, unknown>).employeeNumber}): 基本給${(d as Record<string, unknown>).baseSalary}, 通勤${(d as Record<string, unknown>).commutingAllowance}, みなし${(d as Record<string, unknown>).deemedOvertimePay}, 住民税${(d as Record<string, unknown>).residentTax}, 賞与${(d as Record<string, unknown>).bonus}, 単価${(d as Record<string, unknown>).unitPrice}`
+    ([name, d]) => {
+      const r = d as Record<string, unknown>;
+      return `${name}(${r.employeeNumber}): 基本給${r.baseSalary}, 通勤${r.commutingAllowance}, 交通費単価${r.commutingUnitPrice}, みなし${r.deemedOvertimePay}, 住民税${r.residentTax}, 賞与${r.bonus}, 単価${r.unitPrice}`;
+    }
   );
   return lines.join("\n");
 }
@@ -226,13 +230,14 @@ export async function POST(request: NextRequest) {
 ${employeeContext}
 
 ## ルール
-- **数値の正確性が最重要**: 資料に記載された数値をそのまま正確に読み取ってください。推測や計算で値を作らないでください
-- 資料はマークダウンテーブルまたはタブ区切りで提供されます。各行の列名と値の対応を正確に読み取ってください
+- **数値の正確性が最重要**: 資料に記載された数値をそのまま正確に転記してください
+- 数値を推測・概算・計算で作ることは絶対禁止。資料にある値をそのままコピーしてください
+- 資料はマークダウンテーブル形式です。各行の該当する列名の値を正確に読み取ってください
 - 値が不明・読み取れない場合は「不明」と回答し、推測値を返さないでください
 - 複数資料がある場合は比較・突合してください
 - 金額の不一致や差分があれば明確に指摘してください
-- 回答は日本語で簡潔に、表形式を活用してください
-- ユーザーが「反映して」「転記して」と指示したら、必ず \`\`\`changes\`\`\` ブロックを出力してください
+- 回答は日本語で簡潔に
+- ユーザーが「反映して」「転記して」と指示したら、指示された全フィールド・全従業員分のchangesブロックを出力してください。一部省略は禁止
 
 ## データ反映の方法
 データを反映する場合は、回答の最後に以下の形式でJSONブロックを出力してください。
@@ -246,12 +251,13 @@ ${employeeContext}
 
 ### 利用可能フィールド
 - baseSalary: 基本給
-- commutingAllowance: 通勤手当
+- commutingAllowance: 通勤手当（月額）
+- commutingUnitPrice: 交通費単価（日額の単価）
 - allowance1〜allowance6: 手当1〜6
 - deemedOvertimePay: みなし残業手当
 - deductions: 控除
 - residentTax: 住民税
-- unitPrice: 単価
+- unitPrice: 単価（時給）
 - socialInsuranceGrade: 社保等級
 - overtimeHours: 残業時間
 - overtimePay: 残業代
@@ -263,7 +269,9 @@ ${employeeContext}
 - monthsは対象月の配列（通常は["${month || "YYYY-MM"}"]）
 - employeeNameはアプリ内データに一致するフルネームを使用
 - 分析のみの場合でも、アプリデータとの差分があればchangesブロックを出力する
-- 差分がない場合のみchangesブロックを省略する`;
+- 差分がない場合のみchangesブロックを省略する
+- ユーザーが複数のフィールド更新を指示した場合（例:「単価と交通費単価を反映して」）、指示された全フィールドを漏れなく出力すること。一部だけ返すのは禁止
+- 全従業員分を返すこと。一部だけ返すのは禁止`;
 
     const client = new Anthropic({ apiKey });
 

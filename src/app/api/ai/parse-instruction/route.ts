@@ -3,7 +3,8 @@ import Anthropic from "@anthropic-ai/sdk";
 
 const FIELD_MAP: Record<string, string> = {
   baseSalary: "基本給",
-  commutingAllowance: "通勤手当",
+  commutingAllowance: "通勤手当（月額）",
+  commutingUnitPrice: "交通費単価（日額の単価）",
   allowance1: "手当1",
   allowance2: "手当2",
   allowance3: "手当3",

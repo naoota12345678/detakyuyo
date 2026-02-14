@@ -29,6 +29,7 @@ const ALLOWED_FIELDS = [
   "socialInsuranceGrade",
   "unitPrice",
   "commutingType",
+  "commutingUnitPrice",
   "bonus",
   "events",
 ];
