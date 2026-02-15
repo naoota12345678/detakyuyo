@@ -172,12 +172,14 @@ function CompanyPageContent() {
   const [aiApplying, setAiApplying] = useState(false);
   const [aiFiles, setAiFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [aiFileResult, setAiFileResult] = useState<{
-    text: string;
+  const [aiChatMessages, setAiChatMessages] = useState<{
+    role: "user" | "assistant";
+    content: string;
     changes?: { employeeName: string; field: string; value: number | string; months: string[] }[];
     _debug?: { fileContentsSent?: string[] };
-  } | null>(null);
-  const [aiFileApplying, setAiFileApplying] = useState(false);
+    applying?: boolean;
+  }[]>([]);
+  const chatEndRef = useRef<HTMLDivElement>(null);
   // データチェック
   const [dcOpen, setDcOpen] = useState(false);
   const [dcFile, setDcFile] = useState<File | null>(null);
@@ -214,6 +216,11 @@ function CompanyPageContent() {
   useEffect(() => {
     if (!loading && !user) router.push("/login");
   }, [user, loading, router]);
+
+  // チャットの自動スクロール
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [aiChatMessages, aiLoading]);
 
   const loadData = useCallback(async () => {
     setLoadingData(true);
@@ -562,41 +569,15 @@ function CompanyPageContent() {
   // AI指示を送信
   const handleAiInstruction = async () => {
     if (!aiInstruction.trim() || aiLoading) return;
-    setAiLoading(true);
-    setAiResult(null);
-    setAiFileResult(null);
 
-    // ファイル添付ありの場合は分析APIを使用
-    if (aiFiles.length > 0) {
-      try {
-        const latestMonth = months.length > 0 ? months[months.length - 1] : "";
-        const formData = new FormData();
-        formData.append("instruction", aiInstruction);
-        formData.append("companyName", company?.name || "");
-        formData.append("month", latestMonth);
-        for (const f of aiFiles) {
-          formData.append("files", f);
-        }
-        const res = await fetch("/api/ai/analyze-files", {
-          method: "POST",
-          body: formData,
-        });
-        const result = await res.json();
-        if (!res.ok) {
-          setAiResult({ success: false, error: result.error || "エラーが発生しました" });
-        } else {
-          setAiFileResult({ text: result.analysis, changes: result.changes, _debug: result._debug });
-        }
-      } catch (e) {
-        console.error("AI file analysis failed:", e);
-        setAiResult({ success: false, error: "AI分析に失敗しました" });
-      } finally {
-        setAiLoading(false);
-      }
-      return;
+    // ファイル添付あり or チャット継続中 → チャットモード
+    if (aiFiles.length > 0 || aiChatMessages.length > 0) {
+      return handleAiChat();
     }
 
     // ファイルなしの場合は従来の指示解析
+    setAiLoading(true);
+    setAiResult(null);
     try {
       const activeEmps = employees.filter((e) => e.status !== "退社");
       const empList = activeEmps.map((e) => ({ name: e.name, employeeNumber: e.employeeNumber }));
@@ -626,6 +607,67 @@ function CompanyPageContent() {
     } catch (e) {
       console.error("AI instruction failed:", e);
       setAiResult({ success: false, error: "AI処理に失敗しました" });
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  // AIチャット（ファイル分析 + 会話継続）
+  const handleAiChat = async () => {
+    if (!aiInstruction.trim() || aiLoading) return;
+    const userMsg = aiInstruction.trim();
+    setAiInstruction("");
+
+    // ユーザーメッセージを即座に追加
+    setAiChatMessages((prev) => [...prev, { role: "user", content: userMsg }]);
+    setAiLoading(true);
+    setAiResult(null);
+
+    try {
+      const latestMonth = months.length > 0 ? months[months.length - 1] : "";
+      const formData = new FormData();
+      formData.append("instruction", userMsg);
+      formData.append("companyName", company?.name || "");
+      formData.append("month", latestMonth);
+
+      // チャット履歴を送信（今までの全メッセージ）
+      if (aiChatMessages.length > 0) {
+        const history = aiChatMessages.map((m) => ({ role: m.role, content: m.content }));
+        formData.append("chatHistory", JSON.stringify(history));
+      }
+
+      // ファイルを送信
+      for (const f of aiFiles) {
+        formData.append("files", f);
+      }
+
+      const res = await fetch("/api/ai/analyze-files", {
+        method: "POST",
+        body: formData,
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        setAiChatMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: result.error || "エラーが発生しました" },
+        ]);
+      } else {
+        setAiChatMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: result.analysis,
+            changes: result.changes,
+            _debug: result._debug,
+          },
+        ]);
+      }
+    } catch (e) {
+      console.error("AI chat failed:", e);
+      setAiChatMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: "AI処理に失敗しました" },
+      ]);
     } finally {
       setAiLoading(false);
     }
@@ -685,53 +727,19 @@ function CompanyPageContent() {
     }
   };
 
-  // ファイル分析結果へのフォローアップ（同じanalyze-files APIに会話継続で送信）
-  const handleAiFileFollowup = async () => {
-    if (!aiInstruction.trim() || aiLoading || !aiFileResult) return;
-    setAiLoading(true);
+  // AIチャットの変更提案を反映（同値はスキップ）
+  const handleAiChatApply = async (msgIndex: number) => {
+    const msg = aiChatMessages[msgIndex];
+    if (!msg?.changes || msg.changes.length === 0) return;
+    // Mark this message as applying
+    setAiChatMessages((prev) => prev.map((m, i) => i === msgIndex ? { ...m, applying: true } : m));
     try {
-      const latestMonth = months.length > 0 ? months[months.length - 1] : "";
-      const formData = new FormData();
-      formData.append("instruction", aiInstruction);
-      formData.append("companyName", company?.name || "");
-      formData.append("month", latestMonth);
-      formData.append("previousAnalysis", aiFileResult.text);
-      // ファイルも再送信（AIが元データを参照できるようにする）
-      for (const file of aiFiles) {
-        formData.append("files", file);
-      }
-      const res = await fetch("/api/ai/analyze-files", {
-        method: "POST",
-        body: formData,
-      });
-      const result = await res.json();
-      if (!res.ok) {
-        setAiResult({ success: false, error: result.error || "エラーが発生しました" });
-      } else {
-        setAiFileResult({ text: result.analysis, changes: result.changes, _debug: result._debug });
-      }
-    } catch (e) {
-      console.error("AI file followup failed:", e);
-      setAiResult({ success: false, error: "AI処理に失敗しました" });
-    } finally {
-      setAiLoading(false);
-      setAiInstruction("");
-    }
-  };
-
-  // ファイル分析のAI提案を反映（同値はスキップ）
-  const handleAiFileApply = async () => {
-    if (!aiFileResult?.changes || aiFileResult.changes.length === 0) return;
-    setAiFileApplying(true);
-    try {
-      let applied = 0;
-      for (const change of aiFileResult.changes) {
+      for (const change of msg.changes) {
         const targetEmp = employees.find((e) => e.name === change.employeeName);
         if (!targetEmp) continue;
 
         if (change.field === "employeeMemo") {
           await saveEmployeeMemo(targetEmp, String(change.value));
-          applied++;
         } else if (change.months.length === 0) {
           for (const m of Object.keys(targetEmp.months)) {
             const data = targetEmp.months[m];
@@ -740,7 +748,6 @@ function CompanyPageContent() {
             if (typeof change.value === "number" && change.value === currentVal) continue;
             if (typeof change.value !== "number" && String(change.value) === String(currentVal ?? "")) continue;
             await saveField(data.docId, change.field, change.value);
-            applied++;
           }
         } else {
           for (const month of change.months) {
@@ -750,17 +757,15 @@ function CompanyPageContent() {
             if (typeof change.value === "number" && change.value === currentVal) continue;
             if (typeof change.value !== "number" && String(change.value) === String(currentVal ?? "")) continue;
             await saveField(data.docId, change.field, change.value);
-            applied++;
           }
         }
       }
-      setAiFileResult(null);
-      setAiFiles([]);
+      // Mark changes as applied (remove changes from message)
+      setAiChatMessages((prev) => prev.map((m, i) => i === msgIndex ? { ...m, changes: undefined, applying: false } : m));
     } catch (e) {
-      console.error("AI file apply failed:", e);
+      console.error("AI chat apply failed:", e);
       alert("反映に失敗しました");
-    } finally {
-      setAiFileApplying(false);
+      setAiChatMessages((prev) => prev.map((m, i) => i === msgIndex ? { ...m, applying: false } : m));
     }
   };
 
@@ -1010,7 +1015,7 @@ function CompanyPageContent() {
                   value={aiInstruction}
                   onChange={(e) => setAiInstruction(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") handleAiInstruction(); }}
-                  placeholder={aiFiles.length > 0 ? "資料について指示...（例: この2つを比較して）" : "給与変更の指示を入力..."}
+                  placeholder={aiChatMessages.length > 0 ? "返信..." : aiFiles.length > 0 ? "資料について指示...（例: この2つを比較して）" : "給与変更の指示を入力..."}
                   className="flex-1 rounded-md border border-purple-200 bg-white px-3 py-1.5 text-sm text-zinc-800 placeholder-zinc-400 focus:border-purple-400 focus:outline-none"
                   disabled={aiLoading}
                 />
@@ -1042,7 +1047,7 @@ function CompanyPageContent() {
                   disabled={aiLoading || !aiInstruction.trim()}
                   className="shrink-0 rounded-md bg-purple-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
                 >
-                  {aiLoading ? "分析中..." : "実行"}
+                  {aiLoading ? "分析中..." : aiChatMessages.length > 0 ? "送信" : "実行"}
                 </button>
               </div>
               {/* 添付ファイル一覧 */}
@@ -1171,148 +1176,143 @@ function CompanyPageContent() {
                 </div>
               )}
 
-              {/* ファイル分析結果 */}
-              {aiFileResult && (
+              {/* AIチャット */}
+              {aiChatMessages.length > 0 && (
                 <div className="mt-3 rounded-md border border-purple-200 bg-white p-4">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-medium text-purple-700">AI分析結果</span>
+                    <span className="text-xs font-medium text-purple-700">AIチャット</span>
                     <button
-                      onClick={() => { setAiFileResult(null); setAiFiles([]); }}
+                      onClick={() => { setAiChatMessages([]); setAiFiles([]); }}
                       className="text-xs text-zinc-400 hover:text-zinc-600"
                     >
                       閉じる
                     </button>
                   </div>
-                  <div className="text-sm text-zinc-800 whitespace-pre-wrap leading-relaxed prose prose-sm max-w-none">
-                    {aiFileResult.text}
-                  </div>
-                  {/* デバッグ: AIに送信されたファイル内容 */}
-                  {aiFileResult._debug?.fileContentsSent && aiFileResult._debug.fileContentsSent.length > 0 && (
-                    <details className="mt-2 text-xs text-zinc-400">
-                      <summary className="cursor-pointer hover:text-zinc-600">AIに送信されたファイル内容を確認</summary>
-                      <pre className="mt-1 max-h-40 overflow-auto rounded bg-zinc-50 p-2 text-zinc-500 whitespace-pre-wrap">
-                        {aiFileResult._debug.fileContentsSent.join("\n\n")}
-                      </pre>
-                    </details>
-                  )}
-                  {/* 変更提案 */}
-                  {(() => {
-                    if (!aiFileResult.changes || aiFileResult.changes.length === 0) return null;
-                    // Filter out changes where value is the same as current
-                    const filteredChanges = aiFileResult.changes.filter((change) => {
-                      const targetEmp = employees.find((e) => e.name === change.employeeName);
-                      if (!targetEmp || change.months.length === 0) return true;
-                      const data = targetEmp.months[change.months[0]];
-                      if (!data) return true;
-                      const currentVal = (data as unknown as Record<string, number | string>)[change.field];
-                      // Compare numerically for number fields
-                      if (typeof change.value === "number" && typeof currentVal === "number") {
-                        return change.value !== currentVal;
-                      }
-                      return String(change.value) !== String(currentVal ?? "");
-                    });
-                    if (filteredChanges.length === 0) return null;
-                    const baseFieldNames: Record<string, string> = {
-                      baseSalary: "基本給", commutingAllowance: "通勤手当",
-                      deemedOvertimePay: "みなし残業手当", deductions: "控除",
-                      residentTax: "住民税", unitPrice: "単価", commutingUnitPrice: "交通費単価",
-                      socialInsuranceGrade: "社保等級", overtimeHours: "残業時間", overtimePay: "残業代",
-                      bonus: "賞与", memo: "月メモ", employeeMemo: "人メモ",
-                    };
-                    // Resolve actual allowance names from employee data
-                    const getAllowanceName = (field: string, emp: EmployeeRow | undefined) => {
-                      if (!field.startsWith("allowance") || field.endsWith("Name")) return baseFieldNames[field] || field;
-                      const num = field.replace("allowance", "");
-                      const nameField = `allowance${num}Name` as keyof MonthlyData;
-                      if (emp) {
-                        const latestMonth = [...months].reverse().find((m) => emp.months[m]);
-                        if (latestMonth) {
-                          const name = emp.months[latestMonth][nameField];
-                          if (name && typeof name === "string") return name;
-                        }
-                      }
-                      return `手当${num}`;
-                    };
-                    return (
-                      <div className="mt-3 rounded-md border border-green-200 bg-green-50 p-3">
-                        <p className="text-sm font-medium text-green-800 mb-2">
-                          変更提案（{filteredChanges.length}件）
-                          {filteredChanges.length < aiFileResult.changes.length && (
-                            <span className="text-[10px] text-zinc-500 font-normal ml-1">
-                              ※同値{aiFileResult.changes.length - filteredChanges.length}件を除外
-                            </span>
+                  <div className="max-h-[500px] overflow-y-auto space-y-3 pr-1">
+                    {aiChatMessages.map((msg, idx) => (
+                      <div key={idx} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                        <div className={`max-w-[85%] rounded-lg px-3 py-2 ${msg.role === "user" ? "bg-purple-100 text-purple-900" : "bg-zinc-100 text-zinc-800"}`}>
+                          <div className="text-sm whitespace-pre-wrap leading-relaxed">
+                            {msg.content}
+                          </div>
+                          {/* デバッグ: AIに送信されたファイル内容 */}
+                          {msg._debug?.fileContentsSent && msg._debug.fileContentsSent.length > 0 && (
+                            <details className="mt-2 text-xs text-zinc-400">
+                              <summary className="cursor-pointer hover:text-zinc-600">AIに送信されたファイル内容を確認</summary>
+                              <pre className="mt-1 max-h-40 overflow-auto rounded bg-zinc-50 p-2 text-zinc-500 whitespace-pre-wrap">
+                                {msg._debug.fileContentsSent.join("\n\n")}
+                              </pre>
+                            </details>
                           )}
-                        </p>
-                        <div className="space-y-1">
-                          {filteredChanges.map((change, i) => {
-                            const targetEmp = employees.find((e) => e.name === change.employeeName);
-                            const fieldLabel = getAllowanceName(change.field, targetEmp);
-                            let currentVal: string | number | null = null;
-                            if (change.months.length > 0) {
-                              const data = targetEmp?.months[change.months[0]];
-                              if (data) {
-                                currentVal = (data as unknown as Record<string, number | string>)[change.field] ?? null;
+                          {/* 変更提案 */}
+                          {(() => {
+                            if (!msg.changes || msg.changes.length === 0) return null;
+                            const filteredChanges = msg.changes.filter((change) => {
+                              const targetEmp = employees.find((e) => e.name === change.employeeName);
+                              if (!targetEmp || change.months.length === 0) return true;
+                              const data = targetEmp.months[change.months[0]];
+                              if (!data) return true;
+                              const currentVal = (data as unknown as Record<string, number | string>)[change.field];
+                              if (typeof change.value === "number" && typeof currentVal === "number") {
+                                return change.value !== currentVal;
                               }
-                            }
+                              return String(change.value) !== String(currentVal ?? "");
+                            });
+                            if (filteredChanges.length === 0) return null;
+                            const baseFieldNames: Record<string, string> = {
+                              baseSalary: "基本給", commutingAllowance: "通勤手当",
+                              deemedOvertimePay: "みなし残業手当", deductions: "控除",
+                              residentTax: "住民税", unitPrice: "単価", commutingUnitPrice: "交通費単価",
+                              socialInsuranceGrade: "社保等級", overtimeHours: "残業時間", overtimePay: "残業代",
+                              bonus: "賞与", memo: "月メモ", employeeMemo: "人メモ",
+                            };
+                            const getAllowanceName = (field: string, emp: EmployeeRow | undefined) => {
+                              if (!field.startsWith("allowance") || field.endsWith("Name")) return baseFieldNames[field] || field;
+                              const num = field.replace("allowance", "");
+                              const nameField = `allowance${num}Name` as keyof MonthlyData;
+                              if (emp) {
+                                const latestMonth = [...months].reverse().find((m) => emp.months[m]);
+                                if (latestMonth) {
+                                  const name = emp.months[latestMonth][nameField];
+                                  if (name && typeof name === "string") return name;
+                                }
+                              }
+                              return `手当${num}`;
+                            };
                             return (
-                              <div key={i} className="text-xs text-green-700 flex items-start gap-2">
-                                <span className="font-medium shrink-0">{change.employeeName}</span>
-                                <span className="shrink-0">{fieldLabel}:</span>
-                                {currentVal != null && (
-                                  <>
-                                    <span className="text-zinc-500">
-                                      {typeof currentVal === "number" ? currentVal.toLocaleString() : currentVal}
+                              <div className="mt-2 rounded-md border border-green-200 bg-green-50 p-2">
+                                <p className="text-xs font-medium text-green-800 mb-1">
+                                  変更提案（{filteredChanges.length}件）
+                                  {filteredChanges.length < msg.changes.length && (
+                                    <span className="text-[10px] text-zinc-500 font-normal ml-1">
+                                      ※同値{msg.changes.length - filteredChanges.length}件を除外
                                     </span>
-                                    <span className="text-zinc-400">&rarr;</span>
-                                  </>
-                                )}
-                                <span className="font-bold">
-                                  {typeof change.value === "number" ? change.value.toLocaleString() : change.value}
-                                </span>
-                                {change.months.length > 0 && (
-                                  <span className="text-[10px] text-zinc-500 shrink-0">
-                                    ({change.months.length === 1 ? change.months[0] : `${change.months[0]}〜${change.months[change.months.length - 1]}`})
-                                  </span>
-                                )}
+                                  )}
+                                </p>
+                                <div className="space-y-0.5">
+                                  {filteredChanges.map((change, i) => {
+                                    const targetEmp = employees.find((e) => e.name === change.employeeName);
+                                    const fieldLabel = getAllowanceName(change.field, targetEmp);
+                                    let currentVal: string | number | null = null;
+                                    if (change.months.length > 0) {
+                                      const data = targetEmp?.months[change.months[0]];
+                                      if (data) {
+                                        currentVal = (data as unknown as Record<string, number | string>)[change.field] ?? null;
+                                      }
+                                    }
+                                    return (
+                                      <div key={i} className="text-[11px] text-green-700 flex items-start gap-1.5">
+                                        <span className="font-medium shrink-0">{change.employeeName}</span>
+                                        <span className="shrink-0">{fieldLabel}:</span>
+                                        {currentVal != null && (
+                                          <>
+                                            <span className="text-zinc-500">
+                                              {typeof currentVal === "number" ? currentVal.toLocaleString() : currentVal}
+                                            </span>
+                                            <span className="text-zinc-400">&rarr;</span>
+                                          </>
+                                        )}
+                                        <span className="font-bold">
+                                          {typeof change.value === "number" ? change.value.toLocaleString() : change.value}
+                                        </span>
+                                        {change.months.length > 0 && (
+                                          <span className="text-[10px] text-zinc-500 shrink-0">
+                                            ({change.months.length === 1 ? change.months[0] : `${change.months[0]}〜${change.months[change.months.length - 1]}`})
+                                          </span>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                                <div className="flex gap-2 mt-2">
+                                  <button
+                                    onClick={() => handleAiChatApply(idx)}
+                                    disabled={msg.applying}
+                                    className="rounded-md bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                                  >
+                                    {msg.applying ? "反映中..." : "反映する"}
+                                  </button>
+                                  <button
+                                    onClick={() => setAiChatMessages((prev) => prev.map((m, i) => i === idx ? { ...m, changes: undefined } : m))}
+                                    className="rounded-md border border-zinc-300 bg-white px-3 py-1 text-xs text-zinc-600 hover:bg-zinc-50"
+                                  >
+                                    破棄
+                                  </button>
+                                </div>
                               </div>
                             );
-                          })}
-                        </div>
-                        <div className="flex gap-2 mt-3">
-                          <button
-                            onClick={handleAiFileApply}
-                            disabled={aiFileApplying}
-                            className="rounded-md bg-green-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
-                          >
-                            {aiFileApplying ? "反映中..." : "反映する"}
-                          </button>
-                          <button
-                            onClick={() => setAiFileResult((prev) => prev ? { ...prev, changes: undefined } : null)}
-                            className="rounded-md border border-zinc-300 bg-white px-4 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50"
-                          >
-                            提案を破棄
-                          </button>
+                          })()}
                         </div>
                       </div>
-                    );
-                  })()}
-                  <div className="mt-3 flex gap-2">
-                    <input
-                      type="text"
-                      value={aiInstruction}
-                      onChange={(e) => setAiInstruction(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") handleAiFileFollowup(); }}
-                      placeholder="返信...（例: 山田さんの基本給を反映して）"
-                      className="flex-1 rounded-md border border-purple-200 bg-white px-3 py-1.5 text-sm text-zinc-800 placeholder-zinc-400 focus:border-purple-400 focus:outline-none"
-                      disabled={aiLoading}
-                    />
-                    <button
-                      onClick={handleAiFileFollowup}
-                      disabled={aiLoading || !aiInstruction.trim()}
-                      className="shrink-0 rounded-md bg-purple-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
-                    >
-                      {aiLoading ? "処理中..." : "送信"}
-                    </button>
+                    ))}
+                    {aiLoading && (
+                      <div className="flex justify-start">
+                        <div className="bg-zinc-100 rounded-lg px-3 py-2 text-sm text-zinc-500">
+                          考え中...
+                        </div>
+                      </div>
+                    )}
+                    <div ref={chatEndRef} />
                   </div>
                 </div>
               )}

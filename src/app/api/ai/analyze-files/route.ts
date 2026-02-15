@@ -73,7 +73,7 @@ export async function POST(request: NextRequest) {
     const companyName = formData.get("companyName") as string;
     const month = formData.get("month") as string;
     const files = formData.getAll("files") as File[];
-    const previousAnalysis = formData.get("previousAnalysis") as string | null;
+    const chatHistoryRaw = formData.get("chatHistory") as string | null;
 
     if (!instruction) {
       return NextResponse.json({ error: "指示を入力してください" }, { status: 400 });
@@ -218,8 +218,18 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Add instruction (only for initial request, not follow-ups)
-    if (!previousAnalysis) {
+    // Parse chat history if provided
+    let chatHistory: { role: "user" | "assistant"; content: string }[] = [];
+    if (chatHistoryRaw) {
+      try {
+        chatHistory = JSON.parse(chatHistoryRaw);
+      } catch {
+        // ignore parse errors
+      }
+    }
+
+    // For initial request (no history), add instruction to content blocks
+    if (chatHistory.length === 0) {
       contentBlocks.push({
         type: "text",
         text: instruction,
@@ -272,17 +282,31 @@ ${employeeContext.payroll}
 
     const client = new Anthropic({ apiKey });
 
-    // Build messages: multi-turn if following up on previous analysis
-    const messages: Anthropic.Messages.MessageParam[] = previousAnalysis
-      ? [
-          // フォローアップ時もファイル内容を最初のメッセージに含める
-          { role: "user", content: contentBlocks.length > 0
-            ? [...contentBlocks, { type: "text" as const, text: "添付資料を分析してください。" }]
-            : "添付資料を分析してください。" },
-          { role: "assistant", content: previousAnalysis },
-          { role: "user", content: instruction },
-        ]
-      : [{ role: "user", content: contentBlocks }];
+    // Build messages array
+    const messages: Anthropic.Messages.MessageParam[] = [];
+
+    if (chatHistory.length > 0) {
+      // Multi-turn: first message includes file content blocks + first user message
+      const firstUserMsg = chatHistory[0];
+      messages.push({
+        role: "user",
+        content: contentBlocks.length > 0
+          ? [...contentBlocks, { type: "text" as const, text: firstUserMsg.content }]
+          : firstUserMsg.content,
+      });
+      // Add remaining history (alternating user/assistant)
+      for (let i = 1; i < chatHistory.length; i++) {
+        messages.push({
+          role: chatHistory[i].role,
+          content: chatHistory[i].content,
+        });
+      }
+      // Add the new instruction as the latest user message
+      messages.push({ role: "user", content: instruction });
+    } else {
+      // Initial request: content blocks already include instruction
+      messages.push({ role: "user", content: contentBlocks });
+    }
 
     const message = await client.messages.create({
       model: "claude-sonnet-4-5-20250929",

@@ -78,6 +78,9 @@ getFirestore(app, "detakyuyo")
 | `src/app/api/payroll/update/route.ts` | フィールド更新 |
 | `src/app/api/data-check/analyze/route.ts` | Excelデータチェック |
 | `src/app/api/import/bulk/route.ts` | CSV一括インポート |
+| `src/app/api/ai/parse-instruction/route.ts` | テキスト指示AI（構造化変更） |
+| `src/app/api/ai/analyze-files/route.ts` | ファイル分析AI（Excel/PDF解析） |
+| `src/app/api/debug/force-sync/route.ts` | 手動従業員同期 |
 
 ## 環境変数（全20個、.env.local / Vercel）
 Firebase Admin: `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`
@@ -86,14 +89,44 @@ kintone: `KINTONE_SUBDOMAIN`, `KINTONE_EMPLOYEE_APP_ID`, `KINTONE_EMPLOYEE_API_T
 AI: `ANTHROPIC_API_KEY`
 Slack: `SLACK_BOT_TOKEN`, `SLACK_HIRE_CHANNEL_ID`, `SLACK_LEAVE_CHANNEL_ID`, `SLACK_WEBHOOK_URL`
 
-## 現在のステータス（2026-02-14）
+## AI機能
 
-### 直近の作業完了
+### テキスト指示AI (`/api/ai/parse-instruction`)
+- 自然言語で給与変更指示 → 構造化JSON → 「反映する」ボタンで適用
+- 従業員名の部分一致、月範囲指定、金額変換に対応
+- 質問応答モード: 従業員の在籍・退社状況などを回答
+- モデル: `claude-sonnet-4-5-20250929`
+
+### ファイル分析AI (`/api/ai/analyze-files`)
+- Excel/PDF/画像をアップロード → AI分析 → ````changes````ブロックで構造化変更提案
+- フォローアップ会話対応（`previousAnalysis`で多ターン）
+- Excel読み取り: `sheet_to_json`でレコード形式 `{列名: 値}` に変換（`raw: true`で数値精度確保）
+- max_tokens: 16384（大量変更に対応）
+- 截断JSON自動修復（正規表現フォールバック）
+- 同一値変更の自動フィルタリング、手当名の実名表示
+- 従業員名簿（在籍状況・入退社日）をコンテキストに含む
+- モデル: `claude-sonnet-4-5-20250929`
+
+### 更新可能フィールド（ALLOWED_FIELDS）
+`baseSalary`, `commutingAllowance`, `commutingUnitPrice`, `allowance1`〜`allowance6`, `deemedOvertimePay`, `deductions`, `residentTax`, `unitPrice`, `socialInsuranceGrade`, `overtimeHours`, `overtimePay`, `bonus`, `memo`, `employeeMemo`
+
+## 現在のステータス（2026-02-15）
+
+### 直近の作業完了（2026-02-15）
+- AI分析結果からデータ反映機能（````changes````ブロック → 「反映する」ボタン）
+- AI分析フォローアップ会話（多ターン対応）
+- Excel読み取り精度向上（CSV→セル単位→マークダウン→レコード形式）
+- AIへの従業員名簿提供（在籍・退社状況の質問対応）
+- `commutingUnitPrice`（交通費単価）フィールド追加（API + UI）
+- 従業員検索フィルター（名前・社員番号）
+- データチェック結果のExcelエクスポート
+- GitHubにプッシュ済み
+
+### 以前の作業完了（2026-02-14）
 - Excelマッピング設定UI、データチェック機能強化
 - 退社予定者の同期ロジック改善
 - Slack通知の折りたたみ・未処理/処理済み分離
 - イベント（変更通知）クリア機能
-- GitHubにプッシュ済み（commit: 2fd79fe）
 
 ### 未完了: Vercelデプロイ
 - Vercelプロジェクト作成済み、初回デプロイでビルドエラー
@@ -101,6 +134,3 @@ Slack: `SLACK_BOT_TOKEN`, `SLACK_HIRE_CHANNEL_ID`, `SLACK_LEAVE_CHANNEL_ID`, `SL
 - **原因推定:** `FIREBASE_PRIVATE_KEY` の改行処理 or 環境変数の未設定/誤設定
 - **対処:** Vercelの環境変数画面で全20個が正しく設定されているか確認
 - `firebase-admin.ts` では `replace(/\\n/g, "\n")` 実装済み
-
-### 未調査
-- 齊藤千晶: kintoneにも読み仮名検索でも見つからない（別名登録の可能性、従業員番号での再検索が必要）
