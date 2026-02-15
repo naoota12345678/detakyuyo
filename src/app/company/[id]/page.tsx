@@ -1326,6 +1326,11 @@ function CompanyPageContent() {
                             ["allowance4", allowanceNames["allowance4Name"] || "手当4"],
                             ["allowance5", allowanceNames["allowance5Name"] || "手当5"],
                             ["allowance6", allowanceNames["allowance6Name"] || "手当6"],
+                            ["extraAllowance1", allowanceNames["extraAllowance1Name"] || "計算外手当1"],
+                            ["extraAllowance2", allowanceNames["extraAllowance2Name"] || "計算外手当2"],
+                            ["extraAllowance3", allowanceNames["extraAllowance3Name"] || "計算外手当3"],
+                            ["extraDeduction1", allowanceNames["extraDeduction1Name"] || "控除1"],
+                            ["extraDeduction2", allowanceNames["extraDeduction2Name"] || "控除2"],
                             ["bonus", "賞与"],
                           ] as const).map(([key, label]) => (
                             <div key={key} className="flex items-center gap-2">
