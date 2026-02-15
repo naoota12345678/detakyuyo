@@ -822,6 +822,9 @@ function CompanyPageContent() {
       if (Object.keys(excelMapping).length > 0) {
         formData.append("excelMapping", JSON.stringify(excelMapping));
       }
+      if (Object.keys(allowanceNames).length > 0) {
+        formData.append("allowanceNames", JSON.stringify(allowanceNames));
+      }
       const res = await fetch("/api/data-check/analyze", {
         method: "POST",
         body: formData,

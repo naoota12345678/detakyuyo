@@ -52,6 +52,7 @@ export async function POST(request: NextRequest) {
     const companyName = formData.get("companyName") as string;
     const month = formData.get("month") as string;
     const excelMappingStr = formData.get("excelMapping") as string | null;
+    const allowanceNamesStr = formData.get("allowanceNames") as string | null;
 
     if (!file || !companyName || !month) {
       return NextResponse.json(
@@ -65,6 +66,17 @@ export async function POST(request: NextRequest) {
     if (excelMappingStr) {
       try {
         savedMapping = JSON.parse(excelMappingStr);
+      } catch {
+        // ignore parse errors
+      }
+    }
+
+    // Parse company's allowance names from settings
+    // Format: { allowance1Name: "職務手当", allowance2Name: "役職手当", ... }
+    let settingsAllowanceNames: Record<string, string> = {};
+    if (allowanceNamesStr) {
+      try {
+        settingsAllowanceNames = JSON.parse(allowanceNamesStr);
       } catch {
         // ignore parse errors
       }
@@ -198,10 +210,14 @@ export async function POST(request: NextRequest) {
     const CHECK_FIELDS: { key: string; label: string }[] = [...BASE_CHECK_FIELDS];
     for (let i = 1; i <= 6; i++) {
       const key = `allowance${i}`;
+      const nameKey = `allowance${i}Name`;
+      // Priority: companySettings > monthlyPayroll > fallback
+      const settingsName = settingsAllowanceNames[nameKey];
       const appName = appAllowanceNames[key];
+      const label = settingsName || appName || "";
       const hasMappingSetting = savedMapping[key] && savedMapping[key].trim();
-      if (appName || hasMappingSetting) {
-        CHECK_FIELDS.push({ key, label: appName || `手当${i}` });
+      if (label || hasMappingSetting) {
+        CHECK_FIELDS.push({ key, label: label || `手当${i}` });
       }
     }
 
