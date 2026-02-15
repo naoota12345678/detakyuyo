@@ -115,15 +115,20 @@ ${fieldList}
 
 ## 出力形式
 必ず以下のJSON形式のみで応答してください。マークダウンのコードブロックは使わないでください。
+**重要: 「転記しました」「反映しました」等の文言だけの応答は絶対禁止。必ずchanges配列で全員分のデータを出力すること。**
+
+複数従業員の変更（一括指示の場合）:
 {
   "success": true,
-  "employeeName": "特定した従業員のフルネーム",
   "changes": [
-    { "field": "フィールド名", "value": 数値またはテキスト, "months": ["2026-01", ...], "mode": "set" }
+    { "employeeName": "従業員フルネーム1", "field": "フィールド名", "value": 数値またはテキスト, "months": ["2026-01", ...], "mode": "set" },
+    { "employeeName": "従業員フルネーム2", "field": "フィールド名", "value": 数値またはテキスト, "months": ["2026-01", ...], "mode": "set" }
   ],
   "summary": "変更内容の要約（日本語）"
 }
 ※ mode は "set"（上書き、デフォルト）または "append"（追記、メモ系フィールド用）
+※ employeeName は従業員一覧のフルネームと完全一致させること
+※ 省略禁止: 指示された全員・全項目をchanges配列に含めること
 
 従業員が特定できない場合やフィールドが不明な場合:
 {
@@ -140,7 +145,7 @@ ${fieldList}
 
     const message = await client.messages.create({
       model: "claude-sonnet-4-5-20250929",
-      max_tokens: 1024,
+      max_tokens: 8192,
       messages: [{ role: "user", content: instruction }],
       system: systemPrompt,
     });

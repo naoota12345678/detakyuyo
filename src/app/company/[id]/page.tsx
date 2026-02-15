@@ -660,10 +660,10 @@ function CompanyPageContent() {
           { role: "assistant", content: result.answer },
         ]);
       } else if (result.success && result.changes) {
-        // 変更提案 → employeeNameを各changeに埋め込み
-        const changes = result.changes.map((c: { field: string; value: number | string; months: string[]; mode?: "set" | "append" }) => ({
+        // 変更提案 → employeeNameが各changeに含まれていない場合はresult.employeeNameを埋め込み
+        const changes = result.changes.map((c: { employeeName?: string; field: string; value: number | string; months: string[]; mode?: "set" | "append" }) => ({
           ...c,
-          employeeName: result.employeeName,
+          employeeName: c.employeeName || result.employeeName,
         }));
         setAiChatMessages((prev) => [
           ...prev,
