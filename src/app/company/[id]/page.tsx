@@ -175,6 +175,7 @@ function CompanyPageContent() {
   const [aiFileResult, setAiFileResult] = useState<{
     text: string;
     changes?: { employeeName: string; field: string; value: number | string; months: string[] }[];
+    _debug?: { fileContentsSent?: string[] };
   } | null>(null);
   const [aiFileApplying, setAiFileApplying] = useState(false);
   // データチェック
@@ -584,7 +585,7 @@ function CompanyPageContent() {
         if (!res.ok) {
           setAiResult({ success: false, error: result.error || "エラーが発生しました" });
         } else {
-          setAiFileResult({ text: result.analysis, changes: result.changes });
+          setAiFileResult({ text: result.analysis, changes: result.changes, _debug: result._debug });
         }
       } catch (e) {
         console.error("AI file analysis failed:", e);
@@ -707,7 +708,7 @@ function CompanyPageContent() {
       if (!res.ok) {
         setAiResult({ success: false, error: result.error || "エラーが発生しました" });
       } else {
-        setAiFileResult({ text: result.analysis, changes: result.changes });
+        setAiFileResult({ text: result.analysis, changes: result.changes, _debug: result._debug });
       }
     } catch (e) {
       console.error("AI file followup failed:", e);
@@ -1185,6 +1186,15 @@ function CompanyPageContent() {
                   <div className="text-sm text-zinc-800 whitespace-pre-wrap leading-relaxed prose prose-sm max-w-none">
                     {aiFileResult.text}
                   </div>
+                  {/* デバッグ: AIに送信されたファイル内容 */}
+                  {aiFileResult._debug?.fileContentsSent && aiFileResult._debug.fileContentsSent.length > 0 && (
+                    <details className="mt-2 text-xs text-zinc-400">
+                      <summary className="cursor-pointer hover:text-zinc-600">AIに送信されたファイル内容を確認</summary>
+                      <pre className="mt-1 max-h-40 overflow-auto rounded bg-zinc-50 p-2 text-zinc-500 whitespace-pre-wrap">
+                        {aiFileResult._debug.fileContentsSent.join("\n\n")}
+                      </pre>
+                    </details>
+                  )}
                   {/* 変更提案 */}
                   {(() => {
                     if (!aiFileResult.changes || aiFileResult.changes.length === 0) return null;
