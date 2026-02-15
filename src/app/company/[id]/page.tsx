@@ -695,7 +695,10 @@ function CompanyPageContent() {
       formData.append("companyName", company?.name || "");
       formData.append("month", latestMonth);
       formData.append("previousAnalysis", aiFileResult.text);
-      // ファイルは再送信しない（前回の分析結果がコンテキストになる）
+      // ファイルも再送信（AIが元データを参照できるようにする）
+      for (const file of aiFiles) {
+        formData.append("files", file);
+      }
       const res = await fetch("/api/ai/analyze-files", {
         method: "POST",
         body: formData,

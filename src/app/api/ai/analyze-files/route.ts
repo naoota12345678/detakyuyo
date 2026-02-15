@@ -245,15 +245,17 @@ ${employeeContext.roster}
 ${employeeContext.payroll}
 
 ## ルール
+- **添付資料が最優先の情報源**: 「調べて」「確認して」「教えて」等の指示には、まず添付資料の中身を読み取って回答してください
+- 添付資料に含まれるデータ（数値・名前・項目）を正確に抽出して報告してください
 - **数値の正確性が最重要**: 資料に記載された数値をそのまま正確に転記してください
 - 数値を推測・概算・計算で作ることは絶対禁止。資料にある値をそのままコピーしてください
-- 資料はマークダウンテーブル形式です。各行の該当する列名の値を正確に読み取ってください
 - 値が不明・読み取れない場合は「不明」と回答し、推測値を返さないでください
 - 複数資料がある場合は比較・突合してください
 - 金額の不一致や差分があれば明確に指摘してください
 - 回答は日本語で簡潔に
 - ユーザーが「反映して」「転記して」と指示したら、指示された全フィールド・全従業員分のchangesブロックを出力してください。一部省略は禁止
 - 従業員の在籍・退社について聞かれたら、上記の従業員名簿を参照して回答してください
+- 「システムに登録されているか」ではなく、資料に書かれている**具体的な値**を読み取って回答してください
 
 ## データ反映の方法
 データを反映する場合は、回答の最後に以下の形式でJSONブロックを出力してください。
@@ -294,7 +296,10 @@ ${employeeContext.payroll}
     // Build messages: multi-turn if following up on previous analysis
     const messages: Anthropic.Messages.MessageParam[] = previousAnalysis
       ? [
-          { role: "user", content: "添付資料を分析してください。" },
+          // フォローアップ時もファイル内容を最初のメッセージに含める
+          { role: "user", content: contentBlocks.length > 0
+            ? [...contentBlocks, { type: "text" as const, text: "添付資料を分析してください。" }]
+            : "添付資料を分析してください。" },
           { role: "assistant", content: previousAnalysis },
           { role: "user", content: instruction },
         ]
