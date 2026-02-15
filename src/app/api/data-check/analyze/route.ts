@@ -6,7 +6,8 @@ import * as XLSX from "xlsx";
 // Comparison target fields
 const STRING_FIELDS = new Set(["socialInsuranceGrade", "department"]);
 
-const CHECK_FIELDS = [
+// 手当以外の固定チェックフィールド
+const BASE_CHECK_FIELDS = [
   { key: "department", label: "所属" },
   { key: "baseSalary", label: "基本給" },
   { key: "commutingAllowance", label: "通勤手当" },
@@ -15,12 +16,6 @@ const CHECK_FIELDS = [
   { key: "residentTax", label: "住民税" },
   { key: "unitPrice", label: "単価" },
   { key: "socialInsuranceGrade", label: "社保等級" },
-  { key: "allowance1", label: "手当1" },
-  { key: "allowance2", label: "手当2" },
-  { key: "allowance3", label: "手当3" },
-  { key: "allowance4", label: "手当4" },
-  { key: "allowance5", label: "手当5" },
-  { key: "allowance6", label: "手当6" },
   { key: "bonus", label: "賞与" },
 ] as const;
 
@@ -108,18 +103,137 @@ export async function POST(request: NextRequest) {
     // Also send a sample data row for context
     const sampleRow = allRows.length > 3 ? allRows[3] : allRows[allRows.length - 1];
 
-    // 2. AI Column Mapping
+    // 2. Fetch Firestore data FIRST (to get app's allowance names)
+    const [yearStr, monthStr] = month.split("-");
+    const prevDate = new Date(parseInt(yearStr), parseInt(monthStr) - 2, 1);
+    const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
+
+    const aliasDoc = await adminDb.collection("appSettings").doc("companyAliases").get();
+    const aliasMappings: Record<string, string> = aliasDoc.exists
+      ? aliasDoc.data()?.mappings || {}
+      : {};
+    const matchingNames = new Set<string>();
+    matchingNames.add(companyName);
+    for (const [orig, display] of Object.entries(aliasMappings)) {
+      if (display === companyName) matchingNames.add(orig);
+    }
+
+    let standardWorkingHours = 160;
+    const companySettingsSnap = await adminDb.collection("companySettings").get();
+    for (const csDoc of companySettingsSnap.docs) {
+      const cs = csDoc.data();
+      const sn = cs.shortName || "";
+      const on = cs.officialName || "";
+      if (matchingNames.has(sn) || matchingNames.has(on) || sn.startsWith(companyName) || on.startsWith(companyName)) {
+        if (cs.standardWorkingHours && cs.standardWorkingHours !== 160) {
+          standardWorkingHours = cs.standardWorkingHours;
+        }
+      }
+    }
+
+    const snapshot = await adminDb.collection("monthlyPayroll").get();
+
+    type AppEmployee = {
+      name: string;
+      employeeNumber: string;
+      status: string;
+      current: Record<string, number | string> | null;
+      prev: Record<string, number | string> | null;
+    };
+
+    const appEmployeeMap = new Map<string, AppEmployee>();
+
+    // Collect app's allowance names from current month data
+    const appAllowanceNames: Record<string, string> = {}; // e.g. { allowance1: "職務手当", allowance2: "役職手当" }
+
+    for (const doc of snapshot.docs) {
+      const d = doc.data();
+      const rawName = d.companyShortName || d.companyName || "";
+      const displayName = aliasMappings[rawName] || rawName;
+      if (!matchingNames.has(rawName) && displayName !== companyName) continue;
+      if (!d.name || !d.month) continue;
+      if (d.month !== month && d.month !== prevMonth) continue;
+
+      // Collect allowance names from current month records
+      if (d.month === month) {
+        for (let i = 1; i <= 6; i++) {
+          const nameKey = `allowance${i}Name`;
+          const valKey = `allowance${i}`;
+          if (d[nameKey] && typeof d[nameKey] === "string" && d[nameKey].trim()) {
+            appAllowanceNames[valKey] = d[nameKey].trim();
+          }
+        }
+      }
+
+      const key = d.kintoneRecordId || d.employeeNumber || d.name;
+      if (!appEmployeeMap.has(key)) {
+        appEmployeeMap.set(key, {
+          name: d.name,
+          employeeNumber: d.employeeNumber || "",
+          status: d.status || "",
+          current: null,
+          prev: null,
+        });
+      }
+
+      const emp = appEmployeeMap.get(key)!;
+      if (d.status) emp.status = d.status;
+
+      const allFields: string[] = [...BASE_CHECK_FIELDS.map(f => f.key)];
+      for (let i = 1; i <= 6; i++) allFields.push(`allowance${i}`);
+
+      const record: Record<string, number | string> = {};
+      for (const fk of allFields) {
+        record[fk] = d[fk] ?? (STRING_FIELDS.has(fk) ? "" : 0);
+      }
+      // 単価が0（自動計算）の場合、(基本給+手当合計)/所定労働時間で算出
+      if (!record.unitPrice || record.unitPrice === 0) {
+        const base = Number(record.baseSalary) || 0;
+        let allowanceSum = 0;
+        for (let i = 1; i <= 6; i++) allowanceSum += Number(d[`allowance${i}`]) || 0;
+        if (standardWorkingHours > 0) {
+          record.unitPrice = Math.round((base + allowanceSum) / standardWorkingHours * 100) / 100;
+        }
+      }
+
+      if (d.month === month) {
+        emp.current = record;
+      } else if (d.month === prevMonth) {
+        emp.prev = record;
+      }
+    }
+
+    // Build dynamic CHECK_FIELDS: base fields + allowances that are configured in app OR in savedMapping
+    const CHECK_FIELDS: { key: string; label: string }[] = [...BASE_CHECK_FIELDS];
+    for (let i = 1; i <= 6; i++) {
+      const key = `allowance${i}`;
+      const appName = appAllowanceNames[key];
+      const hasMappingSetting = savedMapping[key] && savedMapping[key].trim();
+      if (appName || hasMappingSetting) {
+        CHECK_FIELDS.push({ key, label: appName || `手当${i}` });
+      }
+    }
+
+    // 3. AI Column Mapping (now with app's actual allowance names)
     const client = new Anthropic({ apiKey });
 
     const fieldDescriptions = CHECK_FIELDS.map(
       (f) => `- ${f.key}: ${f.label}`
     ).join("\n");
 
-    // Build mapping hints from saved config
     const mappingHints = Object.entries(savedMapping)
       .filter(([, v]) => v && v.trim())
       .map(([key, excelName]) => `- ${key} の列ヘッダーは「${excelName}」です`)
       .join("\n");
+
+    // Build allowance output format dynamically
+    const allowanceOutputLines: string[] = [];
+    for (let i = 1; i <= 6; i++) {
+      const key = `allowance${i}`;
+      if (appAllowanceNames[key]) {
+        allowanceOutputLines.push(`  "${key}": 列番号 or null`);
+      }
+    }
 
     const mappingPrompt = `以下はExcelの給与明細データのヘッダー行とサンプルデータ行です。
 各列がどの給与フィールドに対応するかマッピングしてください。
@@ -149,7 +263,7 @@ ${mappingHints ? `\n## この会社の既知のマッピング（最優先で使
 - 単価: 「時給単価」「KY12_7」等
 - 社保等級: 「健康保険_標準額」「標準報酬月額」等の列。数値が入る
 - 賞与: 「賞与」「ボーナス」「支給額」等
-- 手当1-6: その他の手当列（職務手当、役職手当、資格手当など）。手当の場合はallowance1Nameに手当名も返してください
+${Object.keys(appAllowanceNames).length > 0 ? `- 手当: アプリに登録されている手当名でExcelの列を探してください。手当名と完全一致しなくても、類似のヘッダーがあればマッピングしてください` : ""}
 - ヘッダーが2行にまたがる場合（Row 0とRow 1の結合）も考慮してください
 - データ行の先頭に社員番号がある場合はemployeeNumberとしてマッピングしてください
 
@@ -166,18 +280,7 @@ ${mappingHints ? `\n## この会社の既知のマッピング（最優先で使
   "unitPrice": 列番号 or null,
   "socialInsuranceGrade": 列番号 or null,
   "bonus": 列番号 or null,
-  "allowance1": 列番号 or null,
-  "allowance1Name": "手当名" or null,
-  "allowance2": 列番号 or null,
-  "allowance2Name": "手当名" or null,
-  "allowance3": 列番号 or null,
-  "allowance3Name": "手当名" or null,
-  "allowance4": 列番号 or null,
-  "allowance4Name": "手当名" or null,
-  "allowance5": 列番号 or null,
-  "allowance5Name": "手当名" or null,
-  "allowance6": 列番号 or null,
-  "allowance6Name": "手当名" or null,
+${allowanceOutputLines.length > 0 ? allowanceOutputLines.join(",\n") + "," : ""}
   "headerRowCount": ヘッダーの行数（データが始まる行番号）
 }`;
 
@@ -214,7 +317,7 @@ ${mappingHints ? `\n## この会社の既知のマッピング（最優先で使
     const headerRowCount = (mapping.headerRowCount as number) || 2;
     const dataRows = allRows.slice(headerRowCount);
 
-    // 3. Extract structured data from Excel
+    // 4. Extract structured data from Excel
     type ExcelEmployee = {
       name: string;
       employeeNumber: string;
@@ -229,7 +332,6 @@ ${mappingHints ? `\n## この会社の既知のマッピング（最優先で使
       if (!rawName || typeof rawName !== "string" || !rawName.trim()) continue;
       const name = rawName.trim();
 
-      // 社員番号を取得（数値の場合は文字列化、先頭ゼロ付き対応）
       let employeeNumber = "";
       if (empNumCol != null && row[empNumCol] != null) {
         const raw = row[empNumCol];
@@ -251,95 +353,6 @@ ${mappingHints ? `\n## この会社の既知のマッピング（最優先で使
         }
       }
       excelEmployees.push({ name, employeeNumber, data: empData });
-    }
-
-    // 4. Fetch Firestore data (current & previous month)
-    const [yearStr, monthStr] = month.split("-");
-    const prevDate = new Date(parseInt(yearStr), parseInt(monthStr) - 2, 1);
-    const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
-
-    // Get alias mappings
-    const aliasDoc = await adminDb.collection("appSettings").doc("companyAliases").get();
-    const aliasMappings: Record<string, string> = aliasDoc.exists
-      ? aliasDoc.data()?.mappings || {}
-      : {};
-    const matchingNames = new Set<string>();
-    matchingNames.add(companyName);
-    for (const [orig, display] of Object.entries(aliasMappings)) {
-      if (display === companyName) matchingNames.add(orig);
-    }
-
-    // Get standardWorkingHours from companySettings
-    let standardWorkingHours = 160;
-    const companySettingsSnap = await adminDb.collection("companySettings").get();
-    for (const csDoc of companySettingsSnap.docs) {
-      const cs = csDoc.data();
-      const sn = cs.shortName || "";
-      const on = cs.officialName || "";
-      if (matchingNames.has(sn) || matchingNames.has(on) || sn.startsWith(companyName) || on.startsWith(companyName)) {
-        if (cs.standardWorkingHours && cs.standardWorkingHours !== 160) {
-          standardWorkingHours = cs.standardWorkingHours;
-        }
-      }
-    }
-
-    const snapshot = await adminDb.collection("monthlyPayroll").get();
-
-    type AppEmployee = {
-      name: string;
-      employeeNumber: string;
-      status: string;
-      current: Record<string, number | string> | null;
-      prev: Record<string, number | string> | null;
-    };
-
-    const appEmployeeMap = new Map<string, AppEmployee>();
-
-    for (const doc of snapshot.docs) {
-      const d = doc.data();
-      const rawName = d.companyShortName || d.companyName || "";
-      const displayName = aliasMappings[rawName] || rawName;
-      if (!matchingNames.has(rawName) && displayName !== companyName) continue;
-      if (!d.name || !d.month) continue;
-      if (d.month !== month && d.month !== prevMonth) continue;
-
-      const key = d.kintoneRecordId || d.employeeNumber || d.name;
-      if (!appEmployeeMap.has(key)) {
-        appEmployeeMap.set(key, {
-          name: d.name,
-          employeeNumber: d.employeeNumber || "",
-          status: d.status || "",
-          current: null,
-          prev: null,
-        });
-      }
-
-      const emp = appEmployeeMap.get(key)!;
-      if (d.status) emp.status = d.status;
-
-      const record: Record<string, number | string> = {};
-      for (const field of CHECK_FIELDS) {
-        record[field.key] = d[field.key] ?? (STRING_FIELDS.has(field.key) ? "" : 0);
-      }
-      // 単価が0（自動計算）の場合、(基本給+手当合計)/所定労働時間で算出
-      if (!record.unitPrice || record.unitPrice === 0) {
-        const base = Number(record.baseSalary) || 0;
-        const a1 = Number(d.allowance1) || 0;
-        const a2 = Number(d.allowance2) || 0;
-        const a3 = Number(d.allowance3) || 0;
-        const a4 = Number(d.allowance4) || 0;
-        const a5 = Number(d.allowance5) || 0;
-        const a6 = Number(d.allowance6) || 0;
-        if (standardWorkingHours > 0) {
-          record.unitPrice = Math.round((base + a1 + a2 + a3 + a4 + a5 + a6) / standardWorkingHours * 100) / 100;
-        }
-      }
-
-      if (d.month === month) {
-        emp.current = record;
-      } else if (d.month === prevMonth) {
-        emp.prev = record;
-      }
     }
 
     // 5. Compare (社員番号優先、名前で補助マッチ)
@@ -383,13 +396,7 @@ ${mappingHints ? `\n## この会社の既知のマッピング（最優先で使
         const appVal = matchedApp?.current?.[field.key] ?? null;
         const prevVal = matchedApp?.prev?.[field.key] ?? null;
 
-        // Determine actual field label (use allowance name from mapping if available)
-        let fieldLabel: string = field.label;
-        if (field.key.startsWith("allowance") && !field.key.endsWith("Name")) {
-          const nameKey = `${field.key}Name` as string;
-          const mappedName = mapping[nameKey] as string | null;
-          if (mappedName) fieldLabel = mappedName;
-        }
+        const fieldLabel: string = field.label;
 
         if (excelVal == null && appVal == null) continue; // Both empty, skip
         if (excelVal == null) {
