@@ -1935,6 +1935,18 @@ function TableRow({
         return (
           <td key={m} className={`px-2 py-1.5 border-r border-zinc-100 align-top ${hasEvents ? "bg-amber-50" : ""}`}>
             <div className="space-y-0.5">
+              <div className="flex items-center gap-1 mb-0.5">
+                <input
+                  type="checkbox"
+                  checked={data.confirmed}
+                  onChange={() => onSave(data.docId, "confirmed", !data.confirmed)}
+                  className="h-3.5 w-3.5 rounded border-zinc-300 text-green-600 focus:ring-green-500 cursor-pointer"
+                  title={data.confirmed ? "確認済み" : "未確認"}
+                />
+                <span className={`text-[10px] ${data.confirmed ? "text-green-600 font-medium" : "text-zinc-400"}`}>
+                  {data.confirmed ? "確認済" : "未確認"}
+                </span>
+              </div>
               <div className="flex justify-between gap-1">
                 <span className="text-zinc-400 shrink-0">基</span>
                 <NumCell docId={data.docId} field="baseSalary" value={data.baseSalary} onSave={onSave} />
