@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 
-const FIELD_MAP: Record<string, string> = {
+const BASE_FIELD_MAP: Record<string, string> = {
   baseSalary: "基本給",
   commutingAllowance: "通勤手当（月額）",
   commutingUnitPrice: "交通費単価（日額の単価）",
@@ -27,6 +27,39 @@ const FIELD_MAP: Record<string, string> = {
   employeeMemo: "人メモ（従業員メモ、名前の下に表示される個人メモ）",
   memo: "月メモ（月ごとのメモ）",
 };
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildFieldMap(employees: Record<string, any>[]): Record<string, string> {
+  const fieldMap = { ...BASE_FIELD_MAP };
+
+  // 従業員データから実際の手当名・控除名を取得してラベルを差し替え
+  for (let i = 1; i <= 6; i++) {
+    const nameKey = `allowance${i}Name`;
+    const fieldKey = `allowance${i}`;
+    const actualName = employees.find(e => e[nameKey])?.[nameKey];
+    if (actualName) {
+      fieldMap[fieldKey] = `${actualName}（手当${i}）`;
+    }
+  }
+  for (let i = 1; i <= 3; i++) {
+    const nameKey = `extraAllowance${i}Name`;
+    const fieldKey = `extraAllowance${i}`;
+    const actualName = employees.find(e => e[nameKey])?.[nameKey];
+    if (actualName) {
+      fieldMap[fieldKey] = `${actualName}（計算外手当${i}）`;
+    }
+  }
+  for (let i = 1; i <= 2; i++) {
+    const nameKey = `extraDeduction${i}Name`;
+    const fieldKey = `extraDeduction${i}`;
+    const actualName = employees.find(e => e[nameKey])?.[nameKey];
+    if (actualName) {
+      fieldMap[fieldKey] = `${actualName}（控除項目${i}）`;
+    }
+  }
+
+  return fieldMap;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -79,7 +112,8 @@ export async function POST(request: NextRequest) {
       })
       .join("\n");
 
-    const fieldList = Object.entries(FIELD_MAP)
+    const fieldMap = buildFieldMap(employees);
+    const fieldList = Object.entries(fieldMap)
       .map(([key, label]) => `- ${key}: ${label}`)
       .join("\n");
 
