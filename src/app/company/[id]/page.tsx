@@ -161,21 +161,12 @@ function CompanyPageContent() {
   // AI指示
   const [aiInstruction, setAiInstruction] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
-  const [aiResult, setAiResult] = useState<{
-    success: boolean;
-    employeeName?: string;
-    changes?: { field: string; value: number | string; months: string[]; mode?: "set" | "append" }[];
-    summary?: string;
-    answer?: string;
-    error?: string;
-  } | null>(null);
-  const [aiApplying, setAiApplying] = useState(false);
   const [aiFiles, setAiFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [aiChatMessages, setAiChatMessages] = useState<{
     role: "user" | "assistant";
     content: string;
-    changes?: { employeeName: string; field: string; value: number | string; months: string[] }[];
+    changes?: { employeeName: string; field: string; value: number | string; months: string[]; mode?: "set" | "append" }[];
     _debug?: { fileContentsSent?: string[] };
     applying?: boolean;
   }[]>([]);
@@ -566,58 +557,66 @@ function CompanyPageContent() {
     }
   };
 
+  // 従業員データを構築（parse-instruction用）
+  const buildEmployeePayload = () => {
+    const activeEmps = employees.filter((e) => e.status !== "退社");
+    const latestMonth = months.length > 0 ? months[months.length - 1] : "";
+    return activeEmps.map((e) => {
+      const data = latestMonth ? e.months[latestMonth] : undefined;
+      return {
+        name: e.name,
+        employeeNumber: e.employeeNumber,
+        status: e.status,
+        employmentType: e.employmentType,
+        branchName: e.branchName,
+        ...(data ? {
+          baseSalary: data.baseSalary || 0,
+          commutingAllowance: data.commutingAllowance || 0,
+          commutingUnitPrice: data.commutingUnitPrice || 0,
+          deemedOvertimePay: data.deemedOvertimePay || 0,
+          residentTax: data.residentTax || 0,
+          unitPrice: data.unitPrice || 0,
+          bonus: data.bonus || 0,
+          socialInsuranceGrade: data.socialInsuranceGrade || "",
+          allowance1: data.allowance1 || 0, allowance1Name: data.allowance1Name || "",
+          allowance2: data.allowance2 || 0, allowance2Name: data.allowance2Name || "",
+          allowance3: data.allowance3 || 0, allowance3Name: data.allowance3Name || "",
+          allowance4: data.allowance4 || 0, allowance4Name: data.allowance4Name || "",
+          allowance5: data.allowance5 || 0, allowance5Name: data.allowance5Name || "",
+          allowance6: data.allowance6 || 0, allowance6Name: data.allowance6Name || "",
+          deductions: data.deductions || 0,
+          overtimeHours: data.overtimeHours || 0,
+          overtimePay: data.overtimePay || 0,
+          memo: data.memo || "",
+          employeeMemo: data.employeeMemo || "",
+        } : {}),
+      };
+    });
+  };
+
   // AI指示を送信
   const handleAiInstruction = async () => {
     if (!aiInstruction.trim() || aiLoading) return;
 
-    // ファイル添付あり or チャット継続中 → チャットモード
+    // ファイル添付あり or チャット継続中 → チャットモード（analyze-files）
     if (aiFiles.length > 0 || aiChatMessages.length > 0) {
       return handleAiChat();
     }
 
-    // ファイルなしの場合は従来の指示解析
+    // ファイルなしの初回 → parse-instruction（結果はチャットUIに表示）
+    const userMsg = aiInstruction.trim();
+    setAiInstruction("");
+    setAiChatMessages([{ role: "user", content: userMsg }]);
     setAiLoading(true);
-    setAiResult(null);
+
     try {
-      const activeEmps = employees.filter((e) => e.status !== "退社");
       const latestMonth = months.length > 0 ? months[months.length - 1] : "";
-      const empList = activeEmps.map((e) => {
-        const data = latestMonth ? e.months[latestMonth] : undefined;
-        return {
-          name: e.name,
-          employeeNumber: e.employeeNumber,
-          status: e.status,
-          employmentType: e.employmentType,
-          branchName: e.branchName,
-          ...(data ? {
-            baseSalary: data.baseSalary || 0,
-            commutingAllowance: data.commutingAllowance || 0,
-            commutingUnitPrice: data.commutingUnitPrice || 0,
-            deemedOvertimePay: data.deemedOvertimePay || 0,
-            residentTax: data.residentTax || 0,
-            unitPrice: data.unitPrice || 0,
-            bonus: data.bonus || 0,
-            socialInsuranceGrade: data.socialInsuranceGrade || "",
-            allowance1: data.allowance1 || 0, allowance1Name: data.allowance1Name || "",
-            allowance2: data.allowance2 || 0, allowance2Name: data.allowance2Name || "",
-            allowance3: data.allowance3 || 0, allowance3Name: data.allowance3Name || "",
-            allowance4: data.allowance4 || 0, allowance4Name: data.allowance4Name || "",
-            allowance5: data.allowance5 || 0, allowance5Name: data.allowance5Name || "",
-            allowance6: data.allowance6 || 0, allowance6Name: data.allowance6Name || "",
-            deductions: data.deductions || 0,
-            overtimeHours: data.overtimeHours || 0,
-            overtimePay: data.overtimePay || 0,
-            memo: data.memo || "",
-            employeeMemo: data.employeeMemo || "",
-          } : {}),
-        };
-      });
       const res = await fetch("/api/ai/parse-instruction", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          instruction: aiInstruction,
-          employees: empList,
+          instruction: userMsg,
+          employees: buildEmployeePayload(),
           months,
           companyName: company?.name || "",
           month: latestMonth,
@@ -625,13 +624,38 @@ function CompanyPageContent() {
       });
       const result = await res.json();
       if (!res.ok) {
-        setAiResult({ success: false, error: result.error || "エラーが発生しました" });
-      } else {
-        setAiResult(result);
+        setAiChatMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: result.error || "エラーが発生しました" },
+        ]);
+      } else if (result.answer) {
+        // 質問応答
+        setAiChatMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: result.answer },
+        ]);
+      } else if (result.success && result.changes) {
+        // 変更提案 → employeeNameを各changeに埋め込み
+        const changes = result.changes.map((c: { field: string; value: number | string; months: string[]; mode?: "set" | "append" }) => ({
+          ...c,
+          employeeName: result.employeeName,
+        }));
+        setAiChatMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: result.summary || "変更提案", changes },
+        ]);
+      } else if (result.error) {
+        setAiChatMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: result.error },
+        ]);
       }
     } catch (e) {
       console.error("AI instruction failed:", e);
-      setAiResult({ success: false, error: "AI処理に失敗しました" });
+      setAiChatMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: "AI処理に失敗しました" },
+      ]);
     } finally {
       setAiLoading(false);
     }
@@ -646,7 +670,6 @@ function CompanyPageContent() {
     // ユーザーメッセージを即座に追加
     setAiChatMessages((prev) => [...prev, { role: "user", content: userMsg }]);
     setAiLoading(true);
-    setAiResult(null);
 
     try {
       const latestMonth = months.length > 0 ? months[months.length - 1] : "";
@@ -698,94 +721,54 @@ function CompanyPageContent() {
     }
   };
 
-  // AI提案を反映
-  const handleAiApply = async () => {
-    if (!aiResult?.success || !aiResult.changes || !aiResult.employeeName) return;
-    setAiApplying(true);
-    try {
-      const targetEmp = employees.find((e) => e.name === aiResult.employeeName);
-      if (!targetEmp) {
-        alert("対象従業員が見つかりません");
-        return;
-      }
-      for (const change of aiResult.changes) {
-        const isAppend = change.mode === "append";
-
-        if (change.field === "employeeMemo") {
-          // 人メモは全月共通で保存
-          const latestMonth = [...months].reverse().find((m) => targetEmp.months[m]);
-          const currentMemo = latestMonth ? targetEmp.months[latestMonth].employeeMemo || "" : "";
-          const newValue = isAppend && currentMemo
-            ? currentMemo + "\n" + String(change.value)
-            : String(change.value);
-          await saveEmployeeMemo(targetEmp, newValue);
-        } else if (change.months.length === 0) {
-          // 月指定なし → 全月に適用
-          for (const m of Object.keys(targetEmp.months)) {
-            const data = targetEmp.months[m];
-            if (data) {
-              const finalValue = isAppend && change.field === "memo"
-                ? (data.memo ? data.memo + "\n" + String(change.value) : String(change.value))
-                : change.value;
-              await saveField(data.docId, change.field, finalValue);
-            }
-          }
-        } else {
-          for (const month of change.months) {
-            const data = targetEmp.months[month];
-            if (data) {
-              const finalValue = isAppend && change.field === "memo"
-                ? (data.memo ? data.memo + "\n" + String(change.value) : String(change.value))
-                : change.value;
-              await saveField(data.docId, change.field, finalValue);
-            }
-          }
-        }
-      }
-      setAiResult(null);
-      setAiInstruction("");
-    } catch (e) {
-      console.error("AI apply failed:", e);
-      alert("反映に失敗しました");
-    } finally {
-      setAiApplying(false);
-    }
-  };
-
-  // AIチャットの変更提案を反映（同値はスキップ）
+  // AIチャットの変更提案を反映（同値スキップ + appendモード対応）
   const handleAiChatApply = async (msgIndex: number) => {
     const msg = aiChatMessages[msgIndex];
     if (!msg?.changes || msg.changes.length === 0) return;
-    // Mark this message as applying
     setAiChatMessages((prev) => prev.map((m, i) => i === msgIndex ? { ...m, applying: true } : m));
     try {
       for (const change of msg.changes) {
         const targetEmp = employees.find((e) => e.name === change.employeeName);
         if (!targetEmp) continue;
+        const isAppend = change.mode === "append";
 
         if (change.field === "employeeMemo") {
-          await saveEmployeeMemo(targetEmp, String(change.value));
+          const lm = [...months].reverse().find((m) => targetEmp.months[m]);
+          const currentMemo = lm ? targetEmp.months[lm].employeeMemo || "" : "";
+          const newValue = isAppend && currentMemo
+            ? currentMemo + "\n" + String(change.value)
+            : String(change.value);
+          await saveEmployeeMemo(targetEmp, newValue);
         } else if (change.months.length === 0) {
           for (const m of Object.keys(targetEmp.months)) {
             const data = targetEmp.months[m];
             if (!data) continue;
             const currentVal = (data as unknown as Record<string, number | string>)[change.field];
-            if (typeof change.value === "number" && change.value === currentVal) continue;
-            if (typeof change.value !== "number" && String(change.value) === String(currentVal ?? "")) continue;
-            await saveField(data.docId, change.field, change.value);
+            if (!isAppend) {
+              if (typeof change.value === "number" && change.value === currentVal) continue;
+              if (typeof change.value !== "number" && String(change.value) === String(currentVal ?? "")) continue;
+            }
+            const finalValue = isAppend && change.field === "memo"
+              ? (data.memo ? data.memo + "\n" + String(change.value) : String(change.value))
+              : change.value;
+            await saveField(data.docId, change.field, finalValue);
           }
         } else {
           for (const month of change.months) {
             const data = targetEmp.months[month];
             if (!data) continue;
             const currentVal = (data as unknown as Record<string, number | string>)[change.field];
-            if (typeof change.value === "number" && change.value === currentVal) continue;
-            if (typeof change.value !== "number" && String(change.value) === String(currentVal ?? "")) continue;
-            await saveField(data.docId, change.field, change.value);
+            if (!isAppend) {
+              if (typeof change.value === "number" && change.value === currentVal) continue;
+              if (typeof change.value !== "number" && String(change.value) === String(currentVal ?? "")) continue;
+            }
+            const finalValue = isAppend && change.field === "memo"
+              ? (data.memo ? data.memo + "\n" + String(change.value) : String(change.value))
+              : change.value;
+            await saveField(data.docId, change.field, finalValue);
           }
         }
       }
-      // Mark changes as applied (remove changes from message)
       setAiChatMessages((prev) => prev.map((m, i) => i === msgIndex ? { ...m, changes: undefined, applying: false } : m));
     } catch (e) {
       console.error("AI chat apply failed:", e);
@@ -1095,109 +1078,6 @@ function CompanyPageContent() {
                   >
                     全削除
                   </button>
-                </div>
-              )}
-
-              {/* AI結果表示 */}
-              {aiResult && (
-                <div className="mt-3">
-                  {aiResult.success && aiResult.answer ? (
-                    <div className="rounded-md border border-purple-200 bg-purple-50 p-3">
-                      <p className="text-sm text-purple-800 whitespace-pre-wrap">{aiResult.answer}</p>
-                      <button
-                        onClick={() => setAiResult(null)}
-                        className="mt-2 text-xs text-zinc-400 hover:text-zinc-600"
-                      >
-                        閉じる
-                      </button>
-                    </div>
-                  ) : aiResult.success ? (
-                    <div className="rounded-md border border-green-200 bg-green-50 p-3">
-                      <p className="text-sm font-medium text-green-800 mb-2">{aiResult.summary}</p>
-                      <div className="space-y-1">
-                        {aiResult.changes?.map((change, i) => {
-                          const fieldNames: Record<string, string> = {
-                            baseSalary: "基本給", commutingAllowance: "通勤手当",
-                            allowance1: "手当1", allowance2: "手当2", allowance3: "手当3",
-                            allowance4: "手当4", allowance5: "手当5", allowance6: "手当6",
-                            deemedOvertimePay: "みなし残業手当", deductions: "控除",
-                            residentTax: "住民税", unitPrice: "単価", commutingUnitPrice: "交通費単価",
-                            socialInsuranceGrade: "社保等級", overtimeHours: "残業時間", overtimePay: "残業代",
-                            bonus: "賞与",
-                            employeeMemo: "人メモ", memo: "月メモ",
-                          };
-                          const isAppend = change.mode === "append";
-                          const isMemo = change.field === "employeeMemo" || change.field === "memo";
-                          const targetEmp = employees.find((e) => e.name === aiResult.employeeName);
-
-                          // 現在値取得
-                          let currentVal: string | number | null = null;
-                          if (change.field === "employeeMemo") {
-                            const lm = [...months].reverse().find((m) => targetEmp?.months[m]);
-                            currentVal = lm ? targetEmp?.months[lm]?.employeeMemo || "" : "";
-                          } else if (change.months.length > 0) {
-                            const vals = change.months.map((m) => {
-                              const data = targetEmp?.months[m];
-                              if (!data) return null;
-                              return (data as unknown as Record<string, number | string>)[change.field];
-                            });
-                            currentVal = vals.find((v) => v != null) ?? null;
-                          }
-
-                          return (
-                            <div key={i} className="text-xs text-green-700 flex items-start gap-2">
-                              <span className="font-medium shrink-0">
-                                {fieldNames[change.field] || change.field}
-                                {isAppend ? "（追記）" : ""}:
-                              </span>
-                              {isMemo ? (
-                                <span className="whitespace-pre-wrap">
-                                  {currentVal ? `"${currentVal}" に追記 → ` : ""}
-                                  &quot;{String(change.value)}&quot;
-                                </span>
-                              ) : (
-                                <>
-                                  {currentVal != null && (
-                                    <span className="text-zinc-500">
-                                      {typeof currentVal === "number" ? currentVal.toLocaleString() : currentVal}
-                                    </span>
-                                  )}
-                                  {currentVal != null && <span className="text-zinc-400">&rarr;</span>}
-                                  <span className="font-bold">
-                                    {typeof change.value === "number" ? change.value.toLocaleString() : change.value}
-                                  </span>
-                                </>
-                              )}
-                              {change.months.length > 0 && (
-                                <span className="text-[10px] text-zinc-500 shrink-0">
-                                  ({change.months.length === 1 ? change.months[0] : `${change.months[0]}〜${change.months[change.months.length - 1]}`})
-                                </span>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <div className="flex gap-2 mt-3">
-                        <button
-                          onClick={handleAiApply}
-                          disabled={aiApplying}
-                          className="rounded-md bg-green-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
-                        >
-                          {aiApplying ? "反映中..." : "反映する"}
-                        </button>
-                        <button
-                          onClick={() => setAiResult(null)}
-                          className="rounded-md border border-zinc-300 bg-white px-4 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50"
-                        >
-                          キャンセル
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="rounded-md border border-red-200 bg-red-50 p-3">
-                      <p className="text-sm text-red-700">{aiResult.error}</p>
-                    </div>
-                  )}
                 </div>
               )}
 
