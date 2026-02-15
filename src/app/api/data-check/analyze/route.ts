@@ -166,6 +166,20 @@ export async function POST(request: NextRequest) {
             appAllowanceNames[valKey] = d[nameKey].trim();
           }
         }
+        for (let i = 1; i <= 3; i++) {
+          const nameKey = `extraAllowance${i}Name`;
+          const valKey = `extraAllowance${i}`;
+          if (d[nameKey] && typeof d[nameKey] === "string" && d[nameKey].trim()) {
+            appAllowanceNames[valKey] = d[nameKey].trim();
+          }
+        }
+        for (let i = 1; i <= 2; i++) {
+          const nameKey = `extraDeduction${i}Name`;
+          const valKey = `extraDeduction${i}`;
+          if (d[nameKey] && typeof d[nameKey] === "string" && d[nameKey].trim()) {
+            appAllowanceNames[valKey] = d[nameKey].trim();
+          }
+        }
       }
 
       const key = d.kintoneRecordId || d.employeeNumber || d.name;
@@ -211,13 +225,34 @@ export async function POST(request: NextRequest) {
     for (let i = 1; i <= 6; i++) {
       const key = `allowance${i}`;
       const nameKey = `allowance${i}Name`;
-      // Priority: companySettings > monthlyPayroll > fallback
       const settingsName = settingsAllowanceNames[nameKey];
       const appName = appAllowanceNames[key];
       const label = settingsName || appName || "";
       const hasMappingSetting = savedMapping[key] && savedMapping[key].trim();
       if (label || hasMappingSetting) {
         CHECK_FIELDS.push({ key, label: label || `手当${i}` });
+      }
+    }
+    for (let i = 1; i <= 3; i++) {
+      const key = `extraAllowance${i}`;
+      const nameKey = `extraAllowance${i}Name`;
+      const settingsName = settingsAllowanceNames[nameKey];
+      const appName = appAllowanceNames[key];
+      const label = settingsName || appName || "";
+      const hasMappingSetting = savedMapping[key] && savedMapping[key].trim();
+      if (label || hasMappingSetting) {
+        CHECK_FIELDS.push({ key, label: label || `計算外手当${i}` });
+      }
+    }
+    for (let i = 1; i <= 2; i++) {
+      const key = `extraDeduction${i}`;
+      const nameKey = `extraDeduction${i}Name`;
+      const settingsName = settingsAllowanceNames[nameKey];
+      const appName = appAllowanceNames[key];
+      const label = settingsName || appName || "";
+      const hasMappingSetting = savedMapping[key] && savedMapping[key].trim();
+      if (label || hasMappingSetting) {
+        CHECK_FIELDS.push({ key, label: label || `控除${i}` });
       }
     }
 

@@ -43,6 +43,16 @@ type MonthlyData = {
   socialInsuranceGrade: string;
   unitPrice: number;
   bonus: number;
+  extraAllowance1: number;
+  extraAllowance1Name: string;
+  extraAllowance2: number;
+  extraAllowance2Name: string;
+  extraAllowance3: number;
+  extraAllowance3Name: string;
+  extraDeduction1: number;
+  extraDeduction1Name: string;
+  extraDeduction2: number;
+  extraDeduction2Name: string;
 };
 
 type EmployeeRow = {
@@ -325,6 +335,16 @@ function CompanyPageContent() {
           socialInsuranceGrade: data.socialInsuranceGrade || "",
           unitPrice: data.unitPrice || 0,
           bonus: data.bonus || 0,
+          extraAllowance1: data.extraAllowance1 || 0,
+          extraAllowance1Name: data.extraAllowance1Name || "計算外手当1",
+          extraAllowance2: data.extraAllowance2 || 0,
+          extraAllowance2Name: data.extraAllowance2Name || "計算外手当2",
+          extraAllowance3: data.extraAllowance3 || 0,
+          extraAllowance3Name: data.extraAllowance3Name || "計算外手当3",
+          extraDeduction1: data.extraDeduction1 || 0,
+          extraDeduction1Name: data.extraDeduction1Name || "控除1",
+          extraDeduction2: data.extraDeduction2 || 0,
+          extraDeduction2Name: data.extraDeduction2Name || "控除2",
         };
       });
 
@@ -584,6 +604,11 @@ function CompanyPageContent() {
           allowance4: data.allowance4 || 0, allowance4Name: data.allowance4Name || "",
           allowance5: data.allowance5 || 0, allowance5Name: data.allowance5Name || "",
           allowance6: data.allowance6 || 0, allowance6Name: data.allowance6Name || "",
+          extraAllowance1: data.extraAllowance1 || 0, extraAllowance1Name: data.extraAllowance1Name || "",
+          extraAllowance2: data.extraAllowance2 || 0, extraAllowance2Name: data.extraAllowance2Name || "",
+          extraAllowance3: data.extraAllowance3 || 0, extraAllowance3Name: data.extraAllowance3Name || "",
+          extraDeduction1: data.extraDeduction1 || 0, extraDeduction1Name: data.extraDeduction1Name || "",
+          extraDeduction2: data.extraDeduction2 || 0, extraDeduction2Name: data.extraDeduction2Name || "",
           deductions: data.deductions || 0,
           overtimeHours: data.overtimeHours || 0,
           overtimePay: data.overtimePay || 0,
@@ -2412,6 +2437,41 @@ function DetailModal({
                 ["allowance4", "allowance4Name", "手当4"],
                 ["allowance5", "allowance5Name", "手当5"],
                 ["allowance6", "allowance6Name", "手当6"],
+              ] as const).map(([valueField, nameField, defaultName]) => (
+                <DetailRowWithName
+                  key={valueField}
+                  defaultName={defaultName}
+                  currentName={allowanceNames[nameField] || ""}
+                  months={yearMonths}
+                  emp={emp}
+                  nameField={nameField}
+                  valueField={valueField}
+                  onSave={onSave}
+                  onSaveLabel={onSaveAllowanceName}
+                />
+              ))}
+              {/* 計算外手当 */}
+              {([
+                ["extraAllowance1", "extraAllowance1Name", "計算外手当1"],
+                ["extraAllowance2", "extraAllowance2Name", "計算外手当2"],
+                ["extraAllowance3", "extraAllowance3Name", "計算外手当3"],
+              ] as const).map(([valueField, nameField, defaultName]) => (
+                <DetailRowWithName
+                  key={valueField}
+                  defaultName={defaultName}
+                  currentName={allowanceNames[nameField] || ""}
+                  months={yearMonths}
+                  emp={emp}
+                  nameField={nameField}
+                  valueField={valueField}
+                  onSave={onSave}
+                  onSaveLabel={onSaveAllowanceName}
+                />
+              ))}
+              {/* 控除項目 */}
+              {([
+                ["extraDeduction1", "extraDeduction1Name", "控除1"],
+                ["extraDeduction2", "extraDeduction2Name", "控除2"],
               ] as const).map(([valueField, nameField, defaultName]) => (
                 <DetailRowWithName
                   key={valueField}

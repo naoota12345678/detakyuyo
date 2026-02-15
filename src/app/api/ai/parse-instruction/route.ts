@@ -11,6 +11,11 @@ const FIELD_MAP: Record<string, string> = {
   allowance4: "手当4",
   allowance5: "手当5",
   allowance6: "手当6",
+  extraAllowance1: "計算外手当1（単価計算に含めない手当）",
+  extraAllowance2: "計算外手当2（単価計算に含めない手当）",
+  extraAllowance3: "計算外手当3（単価計算に含めない手当）",
+  extraDeduction1: "控除項目1（家賃等）",
+  extraDeduction2: "控除項目2",
   deemedOvertimePay: "みなし残業手当",
   deductions: "控除",
   residentTax: "住民税",
@@ -57,6 +62,16 @@ export async function POST(request: NextRequest) {
           const val = e[`allowance${i}`];
           const name = e[`allowance${i}Name`];
           if (val) parts.push(`${name || `手当${i}`}${val}`);
+        }
+        for (let i = 1; i <= 3; i++) {
+          const val = e[`extraAllowance${i}`];
+          const name = e[`extraAllowance${i}Name`];
+          if (val) parts.push(`${name || `計算外手当${i}`}${val}`);
+        }
+        for (let i = 1; i <= 2; i++) {
+          const val = e[`extraDeduction${i}`];
+          const name = e[`extraDeduction${i}Name`];
+          if (val) parts.push(`${name || `控除${i}`}${val}`);
         }
         if (e.employeeMemo) parts.push(`[人メモ: "${e.employeeMemo}"]`);
         if (e.memo) parts.push(`[月メモ: "${e.memo}"]`);

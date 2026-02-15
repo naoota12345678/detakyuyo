@@ -21,6 +21,16 @@ function buildEmployeeContext(docs: FirebaseFirestore.QueryDocumentSnapshot[], m
       allowance2Name: d.allowance2Name || "",
       allowance3: d.allowance3 || 0,
       allowance3Name: d.allowance3Name || "",
+      extraAllowance1: d.extraAllowance1 || 0,
+      extraAllowance1Name: d.extraAllowance1Name || "",
+      extraAllowance2: d.extraAllowance2 || 0,
+      extraAllowance2Name: d.extraAllowance2Name || "",
+      extraAllowance3: d.extraAllowance3 || 0,
+      extraAllowance3Name: d.extraAllowance3Name || "",
+      extraDeduction1: d.extraDeduction1 || 0,
+      extraDeduction1Name: d.extraDeduction1Name || "",
+      extraDeduction2: d.extraDeduction2 || 0,
+      extraDeduction2Name: d.extraDeduction2Name || "",
       deemedOvertimePay: d.deemedOvertimePay || 0,
       residentTax: d.residentTax || 0,
       bonus: d.bonus || 0,
@@ -277,7 +287,7 @@ ${employeeContext.payroll}
   { "employeeName": "フルネーム", "field": "フィールド名", "value": 数値またはテキスト, "months": ["${month || "YYYY-MM"}"] }
 ]
 \`\`\`
-利用可能フィールド: baseSalary(基本給), commutingAllowance(通勤手当月額), commutingUnitPrice(交通費単価/日額), allowance1〜6(手当), deemedOvertimePay(みなし残業), deductions(控除), residentTax(住民税), unitPrice(単価/時給), socialInsuranceGrade(社保等級), overtimeHours(残業時間), overtimePay(残業代), bonus(賞与), memo(月メモ)
+利用可能フィールド: baseSalary(基本給), commutingAllowance(通勤手当月額), commutingUnitPrice(交通費単価/日額), allowance1〜6(手当/単価計算含む), extraAllowance1〜3(計算外手当/単価計算に含めない), extraDeduction1〜2(控除項目/家賃等), deemedOvertimePay(みなし残業), deductions(控除), residentTax(住民税), unitPrice(単価/時給), socialInsuranceGrade(社保等級), overtimeHours(残業時間), overtimePay(残業代), bonus(賞与), memo(月メモ)
 金額は数値で出力（「25万」→250000）。employeeNameはアプリ内の名前と一致させる。`;
 
     const client = new Anthropic({ apiKey });

@@ -31,6 +31,16 @@ const ALLOWED_FIELDS = [
   "commutingType",
   "commutingUnitPrice",
   "bonus",
+  "extraAllowance1",
+  "extraAllowance1Name",
+  "extraAllowance2",
+  "extraAllowance2Name",
+  "extraAllowance3",
+  "extraAllowance3Name",
+  "extraDeduction1",
+  "extraDeduction1Name",
+  "extraDeduction2",
+  "extraDeduction2Name",
   "events",
 ];
 

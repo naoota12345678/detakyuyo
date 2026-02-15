@@ -18,6 +18,16 @@ type EmployeeImport = {
   allowance5Name?: string;
   allowance6?: number;
   allowance6Name?: string;
+  extraAllowance1?: number;
+  extraAllowance1Name?: string;
+  extraAllowance2?: number;
+  extraAllowance2Name?: string;
+  extraAllowance3?: number;
+  extraAllowance3Name?: string;
+  extraDeduction1?: number;
+  extraDeduction1Name?: string;
+  extraDeduction2?: number;
+  extraDeduction2Name?: string;
   deemedOvertimePay?: number;
   residentTax?: number;
   unitPrice?: number;
@@ -30,6 +40,11 @@ const IMPORT_FIELDS = [
   "allowance1", "allowance1Name", "allowance2", "allowance2Name",
   "allowance3", "allowance3Name", "allowance4", "allowance4Name",
   "allowance5", "allowance5Name", "allowance6", "allowance6Name",
+  "extraAllowance1", "extraAllowance1Name",
+  "extraAllowance2", "extraAllowance2Name",
+  "extraAllowance3", "extraAllowance3Name",
+  "extraDeduction1", "extraDeduction1Name",
+  "extraDeduction2", "extraDeduction2Name",
   "deemedOvertimePay", "residentTax", "unitPrice", "bonus", "memo",
 ] as const;
 
@@ -134,6 +149,11 @@ export async function POST(request: NextRequest) {
         allowance4: 0, allowance4Name: "",
         allowance5: 0, allowance5Name: "",
         allowance6: 0, allowance6Name: "",
+        extraAllowance1: 0, extraAllowance1Name: "",
+        extraAllowance2: 0, extraAllowance2Name: "",
+        extraAllowance3: 0, extraAllowance3Name: "",
+        extraDeduction1: 0, extraDeduction1Name: "",
+        extraDeduction2: 0, extraDeduction2Name: "",
         deemedOvertimePay: 0,
         residentTax: 0,
         unitPrice: 0,
