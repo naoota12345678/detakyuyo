@@ -746,7 +746,7 @@ function CompanyPageContent() {
     }
   };
 
-  // AIチャットの変更提案を反映（同値スキップ + appendモード対応）
+  // AIチャットの変更提案を反映（appendモード対応）
   const handleAiChatApply = async (msgIndex: number) => {
     const msg = aiChatMessages[msgIndex];
     if (!msg?.changes || msg.changes.length === 0) return;
@@ -768,11 +768,6 @@ function CompanyPageContent() {
           for (const m of Object.keys(targetEmp.months)) {
             const data = targetEmp.months[m];
             if (!data) continue;
-            const currentVal = (data as unknown as Record<string, number | string>)[change.field];
-            if (!isAppend) {
-              if (typeof change.value === "number" && change.value === currentVal) continue;
-              if (typeof change.value !== "number" && String(change.value) === String(currentVal ?? "")) continue;
-            }
             const finalValue = isAppend && change.field === "memo"
               ? (data.memo ? data.memo + "\n" + String(change.value) : String(change.value))
               : change.value;
@@ -782,11 +777,6 @@ function CompanyPageContent() {
           for (const month of change.months) {
             const data = targetEmp.months[month];
             if (!data) continue;
-            const currentVal = (data as unknown as Record<string, number | string>)[change.field];
-            if (!isAppend) {
-              if (typeof change.value === "number" && change.value === currentVal) continue;
-              if (typeof change.value !== "number" && String(change.value) === String(currentVal ?? "")) continue;
-            }
             const finalValue = isAppend && change.field === "memo"
               ? (data.memo ? data.memo + "\n" + String(change.value) : String(change.value))
               : change.value;
