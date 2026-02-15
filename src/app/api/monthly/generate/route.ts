@@ -144,6 +144,7 @@ export async function POST() {
           baseSalary: prev.baseSalary,
           commutingAllowance: prev.commutingAllowance,
           commutingType: prev.commutingType || "月額",
+          commutingUnitPrice: prev.commutingUnitPrice || 0,
           overtimeHours: prev.overtimeHours || 0,
           overtimePay: prev.overtimePay || 0,
           otherAllowances: prev.otherAllowances || 0,
