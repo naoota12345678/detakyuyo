@@ -1087,7 +1087,7 @@ function CompanyPageContent() {
                             allowance1: "手当1", allowance2: "手当2", allowance3: "手当3",
                             allowance4: "手当4", allowance5: "手当5", allowance6: "手当6",
                             deemedOvertimePay: "みなし残業手当", deductions: "控除",
-                            residentTax: "住民税", unitPrice: "単価",
+                            residentTax: "住民税", unitPrice: "単価", commutingUnitPrice: "交通費単価",
                             socialInsuranceGrade: "社保等級", overtimeHours: "残業時間", overtimePay: "残業代",
                             bonus: "賞与",
                             employeeMemo: "人メモ", memo: "月メモ",
@@ -1202,7 +1202,7 @@ function CompanyPageContent() {
                     const baseFieldNames: Record<string, string> = {
                       baseSalary: "基本給", commutingAllowance: "通勤手当",
                       deemedOvertimePay: "みなし残業手当", deductions: "控除",
-                      residentTax: "住民税", unitPrice: "単価",
+                      residentTax: "住民税", unitPrice: "単価", commutingUnitPrice: "交通費単価",
                       socialInsuranceGrade: "社保等級", overtimeHours: "残業時間", overtimePay: "残業代",
                       bonus: "賞与", memo: "月メモ", employeeMemo: "人メモ",
                     };
@@ -2044,6 +2044,10 @@ function TableRow({
                 <span className={`shrink-0 text-blue-500 ${data.unitPrice ? "font-bold" : ""}`} title={data.unitPrice ? "手入力値" : "自動計算"}>単</span>
                 <UnitPriceCell docId={data.docId} manualValue={data.unitPrice} calcValue={calcUnitPrice(data, swh)} onSave={onSave} />
               </div>
+              <div className="flex justify-between gap-1">
+                <span className="text-zinc-400 shrink-0" title="交通費単価">交</span>
+                <NumCell docId={data.docId} field="commutingUnitPrice" value={data.commutingUnitPrice} onSave={onSave} />
+              </div>
               <MemoCell docId={data.docId} initial={data.memo} onSave={(id, v) => onSave(id, "memo", v)} />
             </div>
             {hasEvents && (
@@ -2523,6 +2527,8 @@ function DetailModal({
                   );
                 })}
               </tr>
+              {/* 交通費単価 */}
+              <DetailRow label="交通費単価" months={yearMonths} emp={emp} field="commutingUnitPrice" onSave={onSave} />
               {/* 確認 */}
               <tr className="border-b border-zinc-100">
                 <td className="sticky left-0 z-10 bg-white px-3 py-2 text-zinc-500 border-r border-zinc-200">確認</td>
