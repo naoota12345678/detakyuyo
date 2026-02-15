@@ -1140,26 +1140,7 @@ function CompanyPageContent() {
                           {/* 変更提案 */}
                           {(() => {
                             if (!msg.changes || msg.changes.length === 0) return null;
-                            const filteredChanges = msg.changes.filter((change) => {
-                              const targetEmp = employees.find((e) => e.name === change.employeeName);
-                              if (!targetEmp || change.months.length === 0) return true;
-                              const data = targetEmp.months[change.months[0]];
-                              if (!data) return true;
-                              const currentVal = (data as unknown as Record<string, number | string>)[change.field];
-                              if (typeof change.value === "number" && typeof currentVal === "number") {
-                                return change.value !== currentVal;
-                              }
-                              return String(change.value) !== String(currentVal ?? "");
-                            });
-                            if (filteredChanges.length === 0) {
-                              return (
-                                <div className="mt-2 rounded-md border border-zinc-200 bg-zinc-50 p-2">
-                                  <p className="text-xs text-zinc-500">
-                                    変更提案（{msg.changes.length}件）はすべて現在の値と同じため反映不要です
-                                  </p>
-                                </div>
-                              );
-                            }
+                            const filteredChanges = msg.changes;
                             const baseFieldNames: Record<string, string> = {
                               baseSalary: "基本給", commutingAllowance: "通勤手当",
                               deemedOvertimePay: "みなし残業手当", deductions: "控除",
@@ -1184,11 +1165,6 @@ function CompanyPageContent() {
                               <div className="mt-2 rounded-md border border-green-200 bg-green-50 p-2">
                                 <p className="text-xs font-medium text-green-800 mb-1">
                                   変更提案（{filteredChanges.length}件）
-                                  {filteredChanges.length < msg.changes.length && (
-                                    <span className="text-[10px] text-zinc-500 font-normal ml-1">
-                                      ※同値{msg.changes.length - filteredChanges.length}件を除外
-                                    </span>
-                                  )}
                                 </p>
                                 <div className="space-y-0.5">
                                   {filteredChanges.map((change, i) => {
