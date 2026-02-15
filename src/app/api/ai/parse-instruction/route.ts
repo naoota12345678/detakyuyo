@@ -25,7 +25,7 @@ const FIELD_MAP: Record<string, string> = {
 
 export async function POST(request: NextRequest) {
   try {
-    const { instruction, employees, months, employeeMemos } = await request.json();
+    const { instruction, employees, months, companyName, month } = await request.json();
 
     if (!instruction) {
       return NextResponse.json({ error: "指示を入力してください" }, { status: 400 });
@@ -38,11 +38,29 @@ export async function POST(request: NextRequest) {
 
     const client = new Anthropic({ apiKey });
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const employeeList = employees
-      .map((e: { name: string; employeeNumber: string }) => {
-        const memo = employeeMemos?.[e.name] || "";
-        const memoStr = memo ? ` [現在の人メモ: "${memo}"]` : "";
-        return `- ${e.name}（社員番号: ${e.employeeNumber}）${memoStr}`;
+      .map((e: Record<string, any>) => {
+        const parts = [`${e.name}（社員番号: ${e.employeeNumber}）`];
+        if (e.baseSalary) parts.push(`基本給${e.baseSalary}`);
+        if (e.commutingAllowance) parts.push(`通勤手当${e.commutingAllowance}`);
+        if (e.commutingUnitPrice) parts.push(`交通費単価${e.commutingUnitPrice}`);
+        if (e.deemedOvertimePay) parts.push(`みなし残業${e.deemedOvertimePay}`);
+        if (e.residentTax) parts.push(`住民税${e.residentTax}`);
+        if (e.unitPrice) parts.push(`単価${e.unitPrice}`);
+        if (e.bonus) parts.push(`賞与${e.bonus}`);
+        if (e.socialInsuranceGrade) parts.push(`社保等級${e.socialInsuranceGrade}`);
+        if (e.deductions) parts.push(`控除${e.deductions}`);
+        if (e.overtimeHours) parts.push(`残業${e.overtimeHours}h`);
+        if (e.overtimePay) parts.push(`残業代${e.overtimePay}`);
+        for (let i = 1; i <= 6; i++) {
+          const val = e[`allowance${i}`];
+          const name = e[`allowance${i}Name`];
+          if (val) parts.push(`${name || `手当${i}`}${val}`);
+        }
+        if (e.employeeMemo) parts.push(`[人メモ: "${e.employeeMemo}"]`);
+        if (e.memo) parts.push(`[月メモ: "${e.memo}"]`);
+        return `- ${parts.join(", ")}`;
       })
       .join("\n");
 
@@ -52,8 +70,11 @@ export async function POST(request: NextRequest) {
 
     const systemPrompt = `あなたは給与管理システムのアシスタントです。
 ユーザーの自然言語による給与変更指示を解析し、構造化データとして返してください。
+質問に対しては、以下のデータを参照して具体的な値で回答してください。
 
-## 対象従業員一覧
+# 会社: ${companyName || "不明"} ／ 対象月: ${month || "不明"}
+
+## 対象従業員一覧（当月の給与データ含む）
 ${employeeList}
 
 ## 利用可能月
@@ -73,7 +94,9 @@ ${fieldList}
 - employeeMemo（人メモ）: 「追加」「追記」「書いて」等の場合は mode を "append" にする。既存メモがある場合、改行して追記するテキストだけを value に入れる
 - employeeMemo の mode が "set" の場合は既存メモを完全に置き換える
 - memo（月メモ）も同様に "append" / "set" を使い分ける
+- 質問（「○○さんの基本給は？」「交通費単価いくら？」等）の場合は上記データから具体的な値を回答する
 - 質問（「○○さん辞めた？」「在籍してる？」等）の場合は従業員一覧から情報を探して回答する
+- **「分からない」「アクセスできない」等の回答は禁止。データは上記に全て含まれています**
 
 ## 出力形式
 必ず以下のJSON形式のみで応答してください。マークダウンのコードブロックは使わないでください。

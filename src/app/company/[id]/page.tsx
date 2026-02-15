@@ -580,14 +580,38 @@ function CompanyPageContent() {
     setAiResult(null);
     try {
       const activeEmps = employees.filter((e) => e.status !== "退社");
-      const empList = activeEmps.map((e) => ({ name: e.name, employeeNumber: e.employeeNumber }));
-      const employeeMemos: Record<string, string> = {};
-      for (const emp of activeEmps) {
-        const latestMonth = [...months].reverse().find((m) => emp.months[m]);
-        if (latestMonth) {
-          employeeMemos[emp.name] = emp.months[latestMonth].employeeMemo || "";
-        }
-      }
+      const latestMonth = months.length > 0 ? months[months.length - 1] : "";
+      const empList = activeEmps.map((e) => {
+        const data = latestMonth ? e.months[latestMonth] : undefined;
+        return {
+          name: e.name,
+          employeeNumber: e.employeeNumber,
+          status: e.status,
+          employmentType: e.employmentType,
+          branchName: e.branchName,
+          ...(data ? {
+            baseSalary: data.baseSalary || 0,
+            commutingAllowance: data.commutingAllowance || 0,
+            commutingUnitPrice: data.commutingUnitPrice || 0,
+            deemedOvertimePay: data.deemedOvertimePay || 0,
+            residentTax: data.residentTax || 0,
+            unitPrice: data.unitPrice || 0,
+            bonus: data.bonus || 0,
+            socialInsuranceGrade: data.socialInsuranceGrade || "",
+            allowance1: data.allowance1 || 0, allowance1Name: data.allowance1Name || "",
+            allowance2: data.allowance2 || 0, allowance2Name: data.allowance2Name || "",
+            allowance3: data.allowance3 || 0, allowance3Name: data.allowance3Name || "",
+            allowance4: data.allowance4 || 0, allowance4Name: data.allowance4Name || "",
+            allowance5: data.allowance5 || 0, allowance5Name: data.allowance5Name || "",
+            allowance6: data.allowance6 || 0, allowance6Name: data.allowance6Name || "",
+            deductions: data.deductions || 0,
+            overtimeHours: data.overtimeHours || 0,
+            overtimePay: data.overtimePay || 0,
+            memo: data.memo || "",
+            employeeMemo: data.employeeMemo || "",
+          } : {}),
+        };
+      });
       const res = await fetch("/api/ai/parse-instruction", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -595,7 +619,8 @@ function CompanyPageContent() {
           instruction: aiInstruction,
           employees: empList,
           months,
-          employeeMemos,
+          companyName: company?.name || "",
+          month: latestMonth,
         }),
       });
       const result = await res.json();
