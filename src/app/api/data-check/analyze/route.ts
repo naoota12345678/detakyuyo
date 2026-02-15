@@ -198,6 +198,8 @@ export async function POST(request: NextRequest) {
 
       const allFields: string[] = [...BASE_CHECK_FIELDS.map(f => f.key)];
       for (let i = 1; i <= 6; i++) allFields.push(`allowance${i}`);
+      for (let i = 1; i <= 3; i++) allFields.push(`extraAllowance${i}`);
+      for (let i = 1; i <= 2; i++) allFields.push(`extraDeduction${i}`);
 
       const record: Record<string, number | string> = {};
       for (const fk of allFields) {
