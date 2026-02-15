@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
-import Anthropic from "@anthropic-ai/sdk";
 import * as XLSX from "xlsx";
 
 // Comparison target fields
@@ -69,14 +68,6 @@ export async function POST(request: NextRequest) {
       } catch {
         // ignore parse errors
       }
-    }
-
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: "ANTHROPIC_API_KEY が設定されていません" },
-        { status: 500 }
-      );
     }
 
     // 1. Parse Excel
@@ -214,107 +205,80 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 3. AI Column Mapping (now with app's actual allowance names)
-    const client = new Anthropic({ apiKey });
-
-    const fieldDescriptions = CHECK_FIELDS.map(
-      (f) => `- ${f.key}: ${f.label}`
-    ).join("\n");
-
-    const mappingHints = Object.entries(savedMapping)
-      .filter(([, v]) => v && v.trim())
-      .map(([key, excelName]) => `- ${key} の列ヘッダーは「${excelName}」です`)
-      .join("\n");
-
-    // Build allowance output format dynamically
-    const allowanceOutputLines: string[] = [];
-    for (let i = 1; i <= 6; i++) {
-      const key = `allowance${i}`;
-      if (appAllowanceNames[key]) {
-        allowanceOutputLines.push(`  "${key}": 列番号 or null`);
+    // 3. Column Mapping — savedMappingからヘッダー行を検索。AIは使わない
+    // Flatten all header rows into a single searchable list
+    const headerCells: string[] = [];
+    for (const row of headerRows) {
+      for (let c = 0; c < (row?.length || 0); c++) {
+        const existing = headerCells[c] || "";
+        const cell = row[c] != null ? String(row[c]).trim() : "";
+        // Concatenate multi-row headers (e.g. row0="通勤" row1="手当" → "通勤手当")
+        headerCells[c] = existing ? (existing + cell) : cell;
       }
     }
 
-    const mappingPrompt = `以下はExcelの給与明細データのヘッダー行とサンプルデータ行です。
-各列がどの給与フィールドに対応するかマッピングしてください。
-
-## ヘッダー行
-${headerRows.map((row, i) => `Row ${i}: ${JSON.stringify(row)}`).join("\n")}
-
-## サンプルデータ行
-${JSON.stringify(sampleRow)}
-
-## マッピング対象フィールド
-- employeeNumber: 社員番号（従業員番号、社員No、No.等）
-- name: 氏名（従業員名、社員名）
-${fieldDescriptions}
-${mappingHints ? `\n## この会社の既知のマッピング（最優先で使用してください）\n${mappingHints}\n` : ""}
-## ルール
-- 各フィールドに対して、最も適切な列番号（0始まり）を返してください
-- 該当する列がない場合はnullを返してください
-- employeeNumberフィールドがあれば必ず返してください（社員番号の列）
-- nameフィールドは必須です（氏名が入っている列）
-- 所属: 「部門」「部署」「所属」「支店」等
-- 基本給: 「基本給」「基本賃金」等のヘッダーの列
-- 通勤手当: 「通勤手当(非)」「交通費月額」「通勤手当」等
-- 交通費単価: 「交通費日額」「交通費単価」「通勤日額」等。パート・アルバイトの1日あたりの交通費
-- みなし残業手当: 「みなし残業手当」「固定残業代」等
-- 住民税: 「住民税」
-- 単価: 「時給単価」「KY12_7」等
-- 社保等級: 「健康保険_標準額」「標準報酬月額」等の列。数値が入る
-- 賞与: 「賞与」「ボーナス」「支給額」等
-${Object.keys(appAllowanceNames).length > 0 ? `- 手当: アプリに登録されている手当名でExcelの列を探してください。手当名と完全一致しなくても、類似のヘッダーがあればマッピングしてください` : ""}
-- ヘッダーが2行にまたがる場合（Row 0とRow 1の結合）も考慮してください
-- データ行の先頭に社員番号がある場合はemployeeNumberとしてマッピングしてください
-
-## 出力形式（JSONのみ、コードブロック不使用）
-{
-  "employeeNumber": 列番号 or null,
-  "name": 列番号,
-  "department": 列番号 or null,
-  "baseSalary": 列番号 or null,
-  "commutingAllowance": 列番号 or null,
-  "commutingUnitPrice": 列番号 or null,
-  "deemedOvertimePay": 列番号 or null,
-  "residentTax": 列番号 or null,
-  "unitPrice": 列番号 or null,
-  "socialInsuranceGrade": 列番号 or null,
-  "bonus": 列番号 or null,
-${allowanceOutputLines.length > 0 ? allowanceOutputLines.join(",\n") + "," : ""}
-  "headerRowCount": ヘッダーの行数（データが始まる行番号）
-}`;
-
-    const aiResponse = await client.messages.create({
-      model: "claude-sonnet-4-5-20250929",
-      max_tokens: 1024,
-      messages: [{ role: "user", content: mappingPrompt }],
-    });
-
-    const aiText =
-      aiResponse.content[0].type === "text" ? aiResponse.content[0].text : "";
-    let mapping: Record<string, number | string | null>;
-    try {
-      const jsonStr = aiText
-        .replace(/^```(?:json)?\s*/, "")
-        .replace(/\s*```$/, "")
-        .trim();
-      mapping = JSON.parse(jsonStr);
-    } catch {
-      return NextResponse.json(
-        { error: "AI列マッピングの解析に失敗しました", raw: aiText },
-        { status: 500 }
-      );
+    // Find column index by matching savedMapping value against header cells
+    function findCol(excelName: string | undefined): number | null {
+      if (!excelName || !excelName.trim()) return null;
+      const target = excelName.trim();
+      for (let c = 0; c < headerCells.length; c++) {
+        const h = headerCells[c];
+        if (!h) continue;
+        // Exact match or contains
+        if (h === target || h.includes(target) || target.includes(h)) return c;
+      }
+      return null;
     }
 
-    const nameCol = mapping.name as number;
+    // Build mapping from savedMapping + defaults
+    const allMappingKeys: Record<string, string> = {
+      employeeNumber: "社員番号",
+      name: "氏名",
+      ...Object.fromEntries(CHECK_FIELDS.map(f => [f.key, f.label])),
+    };
+
+    const mapping: Record<string, number | null> = {};
+    for (const [key, defaultLabel] of Object.entries(allMappingKeys)) {
+      // savedMapping takes priority, then try default label
+      const col = findCol(savedMapping[key]) ?? findCol(defaultLabel);
+      mapping[key] = col;
+    }
+
+    // Also try common aliases for name/employeeNumber if not found
+    if (mapping.name == null) {
+      for (const alias of ["氏名", "従業員名", "社員名", "名前"]) {
+        const c = findCol(alias);
+        if (c != null) { mapping.name = c; break; }
+      }
+    }
+    if (mapping.employeeNumber == null) {
+      for (const alias of ["社員番号", "従業員番号", "社員No", "No."]) {
+        const c = findCol(alias);
+        if (c != null) { mapping.employeeNumber = c; break; }
+      }
+    }
+
+    const nameCol = mapping.name;
     if (nameCol == null) {
       return NextResponse.json(
-        { error: "氏名列が特定できませんでした" },
+        { error: "氏名列が特定できませんでした。マッピング設定で「氏名」のExcel列名を指定してください。" },
         { status: 400 }
       );
     }
 
-    const headerRowCount = (mapping.headerRowCount as number) || 2;
+    // Detect header row count: find first row where nameCol has a non-header-like value
+    let headerRowCount = 1;
+    for (let r = 0; r < Math.min(5, allRows.length); r++) {
+      const cell = allRows[r]?.[nameCol];
+      if (cell == null) continue;
+      const s = String(cell).trim();
+      // Skip rows that look like headers (contain "氏名", "名前", etc. or are empty)
+      if (!s || s === "氏名" || s === "従業員名" || s === "社員名" || s === "名前" || s.includes("氏名")) {
+        headerRowCount = r + 1;
+      } else {
+        break;
+      }
+    }
     const dataRows = allRows.slice(headerRowCount);
 
     // 4. Extract structured data from Excel
