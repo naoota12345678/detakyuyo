@@ -1714,6 +1714,7 @@ function CompanyPageContent() {
                       onSave={saveField}
                       onSaveEmployeeMemo={saveEmployeeMemo}
                       onSaveConversionDate={saveConversionDate}
+                      onSaveEmployeeField={saveEmployeeField}
                       onClickName={() => setDetailEmployee(emp)}
                       bonusMonth={bonusMonth}
                     />
@@ -1735,6 +1736,7 @@ function CompanyPageContent() {
                           onSave={saveField}
                           onSaveEmployeeMemo={saveEmployeeMemo}
                           onSaveConversionDate={saveConversionDate}
+                          onSaveEmployeeField={saveEmployeeField}
                           onClickName={() => setDetailEmployee(emp)}
                           bonusMonth={bonusMonth}
                           retired
@@ -1899,6 +1901,7 @@ function TableRow({
   onSave,
   onSaveEmployeeMemo,
   onSaveConversionDate,
+  onSaveEmployeeField,
   onClickName,
   bonusMonth,
   retired,
@@ -1910,6 +1913,7 @@ function TableRow({
   onSave: (docId: string, field: string, value: number | boolean | string | string[]) => void;
   onSaveEmployeeMemo: (emp: EmployeeRow, value: string) => void;
   onSaveConversionDate: (emp: EmployeeRow, value: string) => void;
+  onSaveEmployeeField: (emp: EmployeeRow, field: string, value: string) => void;
   onClickName: () => void;
   bonusMonth: string | null;
   retired?: boolean;
@@ -1939,6 +1943,10 @@ function TableRow({
         <ConversionDateCell
           initial={currentConversionDate}
           onSave={(v) => onSaveConversionDate(emp, v)}
+        />
+        <EmploymentTypeCell
+          initial={emp.employmentType}
+          onSave={(v) => onSaveEmployeeField(emp, "employmentType", v)}
         />
       </td>
 
@@ -2116,6 +2124,44 @@ function ConversionDateCell({
         onChange={(e) => handleChange(e.target.value)}
         className="flex-1 rounded border border-violet-200 bg-violet-50/50 px-1.5 py-0.5 text-[10px] text-violet-800 focus:border-violet-400 focus:outline-none"
       />
+    </div>
+  );
+}
+
+// ========================================
+// Employment Type Selector (雇用形態セレクト)
+// ========================================
+const EMPLOYMENT_TYPES = ["正社員", "パート", "アルバイト", "契約社員", "役員", "嘱託"];
+
+function EmploymentTypeCell({
+  initial,
+  onSave,
+}: {
+  initial: string;
+  onSave: (value: string) => void;
+}) {
+  const [value, setValue] = useState(initial);
+
+  const handleChange = (v: string) => {
+    setValue(v);
+    onSave(v);
+  };
+
+  return (
+    <div className="flex items-center gap-1.5 mt-1">
+      <span className="text-[10px] text-emerald-500 shrink-0">形態</span>
+      <select
+        value={value}
+        onChange={(e) => handleChange(e.target.value)}
+        className="flex-1 rounded border border-emerald-200 bg-emerald-50/50 px-1.5 py-0.5 text-[10px] text-emerald-800 focus:border-emerald-400 focus:outline-none"
+      >
+        {EMPLOYMENT_TYPES.map((t) => (
+          <option key={t} value={t}>{t}</option>
+        ))}
+        {value && !EMPLOYMENT_TYPES.includes(value) && (
+          <option value={value}>{value}</option>
+        )}
+      </select>
     </div>
   );
 }
@@ -2389,6 +2435,10 @@ function DetailModal({
                 return lm ? emp.months[lm].conversionDate : "";
               })()}
               onSave={(v) => onSaveConversionDate(emp, v)}
+            />
+            <EmploymentTypeCell
+              initial={emp.employmentType}
+              onSave={(v) => onSaveEmployeeField(emp, "employmentType", v)}
             />
           </div>
         </div>

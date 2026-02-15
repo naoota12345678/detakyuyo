@@ -41,6 +41,10 @@ const ALLOWED_FIELDS = [
   "extraDeduction1Name",
   "extraDeduction2",
   "extraDeduction2Name",
+  "employmentType",
+  "branchName",
+  "department",
+  "conversionDate",
   "events",
 ];
 
