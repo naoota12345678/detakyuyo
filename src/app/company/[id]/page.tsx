@@ -1151,7 +1151,15 @@ function CompanyPageContent() {
                               }
                               return String(change.value) !== String(currentVal ?? "");
                             });
-                            if (filteredChanges.length === 0) return null;
+                            if (filteredChanges.length === 0) {
+                              return (
+                                <div className="mt-2 rounded-md border border-zinc-200 bg-zinc-50 p-2">
+                                  <p className="text-xs text-zinc-500">
+                                    変更提案（{msg.changes.length}件）はすべて現在の値と同じため反映不要です
+                                  </p>
+                                </div>
+                              );
+                            }
                             const baseFieldNames: Record<string, string> = {
                               baseSalary: "基本給", commutingAllowance: "通勤手当",
                               deemedOvertimePay: "みなし残業手当", deductions: "控除",
