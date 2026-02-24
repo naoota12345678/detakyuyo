@@ -6,6 +6,7 @@ import {
   EMPLOYEE_FIELD_CODES,
   EmployeeData,
 } from "@/lib/kintone-mapping";
+import { isRetired } from "@/lib/employee-utils";
 
 function getCurrentMonth(): string {
   const now = new Date();
@@ -168,27 +169,45 @@ export async function POST() {
         } else {
           // 既存レコードの変更検知
           const existingData = existing.data()!;
+          const manuallyEdited: Record<string, string> = existingData.manuallyEditedFields || {};
           const changeEvents: string[] = [];
+          const skippedFields: string[] = [];
 
+          // baseSalary: 手動編集済みならスキップ
           if (existingData.baseSalary !== emp.baseSalary) {
-            changeEvents.push(
-              `基本給変更: ${existingData.baseSalary} → ${emp.baseSalary}`
-            );
+            if (manuallyEdited.baseSalary) {
+              skippedFields.push("baseSalary");
+            } else {
+              changeEvents.push(
+                `基本給変更: ${existingData.baseSalary} → ${emp.baseSalary}`
+              );
+            }
           }
+          // companyName: UIで編集不可なので常に検知
           if (existingData.companyName !== emp.companyName) {
             changeEvents.push(
               `所属変更: ${existingData.companyName} → ${emp.companyName}`
             );
           }
+          // employmentType: 手動編集済みならスキップ
           if (existingData.employmentType !== emp.employmentType) {
-            changeEvents.push(
-              `雇用形態変更: ${existingData.employmentType} → ${emp.employmentType}`
-            );
+            if (manuallyEdited.employmentType) {
+              skippedFields.push("employmentType");
+            } else {
+              changeEvents.push(
+                `雇用形態変更: ${existingData.employmentType} → ${emp.employmentType}`
+              );
+            }
           }
+          // commutingAllowance: 手動編集済みならスキップ
           if (existingData.commutingAllowance !== emp.commutingAllowance) {
-            changeEvents.push(
-              `通勤手当変更: ${existingData.commutingAllowance} → ${emp.commutingAllowance}`
-            );
+            if (manuallyEdited.commutingAllowance) {
+              skippedFields.push("commutingAllowance");
+            } else {
+              changeEvents.push(
+                `通勤手当変更: ${existingData.commutingAllowance} → ${emp.commutingAllowance}`
+              );
+            }
           }
 
           // companyShortName が未設定なら常に更新対象にする
@@ -199,10 +218,11 @@ export async function POST() {
               name: emp.name,
               companyName: emp.companyName,
               companyShortName: emp.companyShortName,
-              branchName: emp.branchName,
-              employmentType: emp.employmentType,
-              baseSalary: emp.baseSalary,
-              commutingAllowance: emp.commutingAllowance,
+              // 手動編集済みフィールドはアプリの値を保持
+              branchName: manuallyEdited.branchName ? existingData.branchName : emp.branchName,
+              employmentType: manuallyEdited.employmentType ? existingData.employmentType : emp.employmentType,
+              baseSalary: manuallyEdited.baseSalary ? existingData.baseSalary : emp.baseSalary,
+              commutingAllowance: manuallyEdited.commutingAllowance ? existingData.commutingAllowance : emp.commutingAllowance,
               socialInsurance: emp.socialInsurance,
               employmentInsurance: emp.employmentInsurance,
               healthStandardMonthly: emp.healthStandardMonthly,
@@ -210,10 +230,15 @@ export async function POST() {
               lastSyncedAt: new Date().toISOString(),
             };
 
-            if (changeEvents.length > 0) {
+            const allNewEvents = [...changeEvents];
+            if (skippedFields.length > 0) {
+              allNewEvents.push(`手動編集保持: ${skippedFields.join(", ")}`);
+            }
+
+            if (allNewEvents.length > 0) {
               const existingEvents: string[] = existingData.events || [];
-              updateData.events = [...existingEvents, ...changeEvents];
-              events.push(`${emp.name}: ${changeEvents.join(", ")}`);
+              updateData.events = [...existingEvents, ...allNewEvents];
+              events.push(`${emp.name}: ${allNewEvents.join(", ")}`);
             }
 
             batch.update(existing.ref, updateData);
@@ -246,7 +271,7 @@ export async function POST() {
         retiredRecordIds.add(recordId);
         const existingEvents: string[] = data.events || [];
 
-        if (data.status !== "退社") {
+        if (!isRetired(data.status)) {
           batch.update(doc.ref, {
             status: "退社",
             events: [...existingEvents, `退社検知: ${new Date().toISOString().split("T")[0]}`],

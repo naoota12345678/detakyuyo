@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
+import { isRetired } from "@/lib/employee-utils";
 
 function getNextMonth(monthStr: string): string {
   const [y, m] = monthStr.split("-").map(Number);
@@ -80,8 +81,8 @@ export async function POST(request: NextRequest) {
     for (const doc of companyDocs) {
       const prev = doc.data();
 
-      // 退社済みはスキップ
-      if (prev.status === "退社") continue;
+      // 退社済み（非表示含む）はスキップ
+      if (isRetired(prev.status)) continue;
 
       // 既に翌月にレコードがある場合はスキップ
       if (prev.kintoneRecordId && existingNextByRecordId.has(prev.kintoneRecordId)) {

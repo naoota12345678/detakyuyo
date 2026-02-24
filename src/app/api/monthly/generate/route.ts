@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
+import { isRetired } from "@/lib/employee-utils";
 
 function getMonthStr(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
@@ -81,8 +82,8 @@ export async function POST() {
       try {
         const prev = doc.data();
 
-        // 退社済みはスキップ
-        if (prev.status === "退社") continue;
+        // 退社済み（非表示含む）はスキップ
+        if (isRetired(prev.status)) continue;
 
         const events: string[] = [];
 

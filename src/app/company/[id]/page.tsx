@@ -389,6 +389,32 @@ function CompanyPageContent() {
     if (user) loadData();
   }, [user, loadData]);
 
+  // 退職者を非表示にする（ソフトデリート）
+  const hideRetiredEmployee = async (emp: EmployeeRow) => {
+    try {
+      const docIds = Object.values(emp.months).map((m) => m.docId);
+      await Promise.all(
+        docIds.map((docId) =>
+          fetch("/api/payroll/hide-retired", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ docId }),
+          })
+        )
+      );
+      // ローカル更新
+      setEmployees((prev) =>
+        prev.map((e) =>
+          e.name === emp.name && e.employeeNumber === emp.employeeNumber
+            ? { ...e, status: "退社（非表示）" }
+            : e
+        )
+      );
+    } catch (e) {
+      console.error("Hide retired failed:", e);
+    }
+  };
+
   // 汎用フィールド保存
   const saveField = async (docId: string, field: string, value: number | boolean | string | string[]) => {
     try {
@@ -577,9 +603,12 @@ function CompanyPageContent() {
     }
   };
 
+  // 退社系ステータス判定
+  const isRetiredStatus = (s: string | undefined) => s === "退社" || s === "退社（非表示）";
+
   // 従業員データを構築（parse-instruction用）
   const buildEmployeePayload = () => {
-    const activeEmps = employees.filter((e) => e.status !== "退社");
+    const activeEmps = employees.filter((e) => !isRetiredStatus(e.status));
     const latestMonth = months.length > 0 ? months[months.length - 1] : "";
     return activeEmps.map((e) => {
       const data = latestMonth ? e.months[latestMonth] : undefined;
@@ -879,8 +908,9 @@ function CompanyPageContent() {
     const q = searchQuery.toLowerCase();
     return e.name.toLowerCase().includes(q) || e.employeeNumber.toLowerCase().includes(q);
   };
-  const activeEmployees = employees.filter((e) => e.status !== "退社").filter(searchFilter).sort(sortFn);
+  const activeEmployees = employees.filter((e) => !isRetiredStatus(e.status)).filter(searchFilter).sort(sortFn);
   const retiredEmployees = employees.filter((e) => e.status === "退社").filter(searchFilter).sort(sortFn);
+  const hiddenRetiredEmployees = employees.filter((e) => e.status === "退社（非表示）");
   const activeCount = activeEmployees.length;
 
   // 附番重複チェック（同一会社内）
@@ -1698,6 +1728,9 @@ function CompanyPageContent() {
                       <tr className="bg-zinc-100">
                         <td colSpan={months.length + 1} className="px-3 py-1.5 text-xs font-medium text-zinc-500">
                           退職者（{retiredEmployees.length}名）
+                          {hiddenRetiredEmployees.length > 0 && (
+                            <span className="ml-2 text-zinc-400">非表示: {hiddenRetiredEmployees.length}名</span>
+                          )}
                         </td>
                       </tr>
                       {retiredEmployees.map((emp) => (
@@ -1714,6 +1747,7 @@ function CompanyPageContent() {
                           onClickName={() => setDetailEmployee(emp)}
                           bonusMonth={bonusMonth}
                           retired
+                          onHide={() => hideRetiredEmployee(emp)}
                         />
                       ))}
                     </>
@@ -1879,6 +1913,7 @@ function TableRow({
   onClickName,
   bonusMonth,
   retired,
+  onHide,
 }: {
   emp: EmployeeRow;
   months: string[];
@@ -1891,6 +1926,7 @@ function TableRow({
   onClickName: () => void;
   bonusMonth: string | null;
   retired?: boolean;
+  onHide?: () => void;
 }) {
   // employeeMemo は最新月の値を表示
   const latestMonth = [...months].reverse().find((m) => emp.months[m]);
@@ -1922,6 +1958,14 @@ function TableRow({
           initial={emp.employmentType}
           onSave={(v) => onSaveEmployeeField(emp, "employmentType", v)}
         />
+        {retired && onHide && (
+          <button
+            onClick={() => { if (confirm(`${emp.name} を非表示にしますか？\nデータベースには残ります。`)) onHide(); }}
+            className="mt-1 text-[10px] text-red-400 hover:text-red-600 hover:underline"
+          >
+            非表示にする
+          </button>
+        )}
       </td>
 
       {months.map((m) => {

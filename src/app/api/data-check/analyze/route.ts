@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
+import { isRetired } from "@/lib/employee-utils";
 import * as XLSX from "xlsx";
 
 // Comparison target fields
@@ -501,7 +502,7 @@ export async function POST(request: NextRequest) {
 
     // People diff
     const activeAppEntries = Array.from(appEmployeeMap.entries()).filter(
-      ([, e]) => e.status !== "退社" && e.current != null
+      ([, e]) => !isRetired(e.status) && e.current != null
     );
     const missing = activeAppEntries
       .filter(([key]) => !matchedAppKeys.has(key))

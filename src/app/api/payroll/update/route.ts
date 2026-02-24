@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
 
+// 同期で上書きされるフィールドのうち、UIでも編集可能なもの
+// これらが手動編集された場合、次回同期でkintoneによる上書きをスキップする
+const SYNC_OVERRIDE_FIELDS = [
+  "baseSalary",
+  "commutingAllowance",
+  "employmentType",
+  "branchName",
+];
+
 const ALLOWED_FIELDS = [
   "baseSalary",
   "commutingAllowance",
@@ -66,9 +75,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    await adminDb.collection("monthlyPayroll").doc(docId).update({
-      [field]: value,
-    });
+    const updatePayload: Record<string, unknown> = { [field]: value };
+
+    // 同期上書き対象フィールドの場合、手動編集フラグを記録
+    if (SYNC_OVERRIDE_FIELDS.includes(field)) {
+      updatePayload[`manuallyEditedFields.${field}`] = new Date().toISOString();
+    }
+
+    await adminDb.collection("monthlyPayroll").doc(docId).update(updatePayload);
 
     return NextResponse.json({ success: true });
   } catch (error) {
