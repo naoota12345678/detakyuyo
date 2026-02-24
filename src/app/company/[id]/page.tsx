@@ -77,6 +77,7 @@ type SortKey = "employeeNumber" | "name" | "hireDate";
 
 type CompanyMeta = {
   name: string;
+  shortName: string;
   closingDay: number | null;
   payDay: number | null;
   standardWorkingHours: number;
@@ -244,6 +245,7 @@ function CompanyPageContent() {
       let standardWorkingHours = 160;
       let foundDocId: string | null = null;
       let foundExcelMapping: Record<string, string> = {};
+      let foundShortName = "";
       // 完全一致 or shortNameがcompanyNameで始まるエントリも対象にする
       companiesSnapshot.docs.forEach((d) => {
         const data = d.data();
@@ -253,6 +255,7 @@ function CompanyPageContent() {
           || sn.startsWith(companyName) || on.startsWith(companyName);
         if (isMatch) {
           foundDocId = d.id;
+          foundShortName = sn;
           if (data.closingDay != null) closingDay = data.closingDay;
           if (data.payDay != null) payDay = data.payDay;
           if (data.standardWorkingHours && data.standardWorkingHours !== 160) {
@@ -266,7 +269,7 @@ function CompanyPageContent() {
           }
         }
       });
-      setCompany({ name: companyName, closingDay, payDay, standardWorkingHours });
+      setCompany({ name: companyName, shortName: foundShortName, closingDay, payDay, standardWorkingHours });
       setCompanySettingsDocId(foundDocId);
       setExcelMapping(foundExcelMapping);
 
@@ -818,6 +821,40 @@ function CompanyPageContent() {
       console.error("AI chat apply failed:", e);
       alert("反映に失敗しました");
       setAiChatMessages((prev) => prev.map((m, i) => i === msgIndex ? { ...m, applying: false } : m));
+    }
+  };
+
+  // 従業員同期（会社単位）
+  const [syncing, setSyncing] = useState(false);
+  const handleSyncEmployees = async () => {
+    if (!company?.shortName) {
+      alert("会社のshortNameが見つかりません");
+      return;
+    }
+    if (!confirm(`${company.name} の従業員情報をkintoneから同期しますか？`)) return;
+
+    setSyncing(true);
+    try {
+      const res = await fetch("/api/kintone/sync-employees", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ companyShortName: company.shortName }),
+      });
+      const result = await res.json();
+      if (result.success) {
+        const msg = [`同期完了: 新規${result.created}名, 更新${result.updated}名, 退社${result.retired}名`];
+        if (result.events?.length > 0) msg.push(`\n変更:\n${result.events.join("\n")}`);
+        if (result.errors?.length > 0) msg.push(`\nエラー:\n${result.errors.join("\n")}`);
+        alert(msg.join("\n"));
+        loadData();
+      } else {
+        alert(result.error || "同期に失敗しました");
+      }
+    } catch (e) {
+      console.error("Sync failed:", e);
+      alert("同期に失敗しました");
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -1683,6 +1720,13 @@ function CompanyPageContent() {
                     />
                   </div>
                 )}
+                <button
+                  onClick={handleSyncEmployees}
+                  disabled={syncing}
+                  className="px-3 py-1.5 text-xs rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 font-medium"
+                >
+                  {syncing ? "同期中..." : "従業員更新"}
+                </button>
                 <button
                   onClick={handleComplete}
                   disabled={completing}

@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
 import { fetchAllRecords } from "@/lib/kintone";
 import {
@@ -75,7 +75,7 @@ function buildPayrollDoc(emp: EmployeeData, month: string) {
   };
 }
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   try {
     const appId = process.env.KINTONE_EMPLOYEE_APP_ID;
     const token = process.env.KINTONE_EMPLOYEE_API_TOKEN;
@@ -85,6 +85,17 @@ export async function POST() {
         { error: "kintone 従業員設定が不足しています" },
         { status: 500 }
       );
+    }
+
+    // オプション: 会社単位同期のパラメータ
+    let targetCompany: string | null = null;
+    try {
+      const body = await request.json();
+      if (body.companyShortName) {
+        targetCompany = body.companyShortName;
+      }
+    } catch {
+      // bodyなし（全体同期）の場合は無視
     }
 
     const month = getCurrentMonth();
@@ -101,6 +112,19 @@ export async function POST() {
         validShortNames.add(data.shortName);
       }
     });
+
+    // 会社単位同期の場合、対象会社が受託先に存在するか確認
+    if (targetCompany && !validShortNames.has(targetCompany)) {
+      return NextResponse.json(
+        { error: `受託先に存在しない会社です: ${targetCompany}` },
+        { status: 400 }
+      );
+    }
+
+    // 会社単位同期の場合、validShortNames を対象会社のみに絞る
+    const syncTargetNames = targetCompany
+      ? new Set<string>([targetCompany])
+      : validShortNames;
 
     // kintone から在籍者 + 退社日が今日以降の退社予定者を取得
     const today = new Date().toISOString().split("T")[0];
@@ -143,8 +167,8 @@ export async function POST() {
       try {
         const emp = mapKintoneToEmployee(record);
 
-        // 受託先フィルタ: branchName が companySettings に存在しない従業員はスキップ
-        if (!validShortNames.has(emp.branchName)) {
+        // 受託先フィルタ: branchName が同期対象に含まれない従業員はスキップ
+        if (!syncTargetNames.has(emp.branchName)) {
           skipped++;
           continue;
         }
@@ -259,14 +283,14 @@ export async function POST() {
     }
 
     // 退職検知: 既存レコードにあるが kintone 在籍者にいない人
-    // 受託先の従業員だけが対象（branchName が validShortNames に含まれる）
+    // 同期対象の会社の従業員だけが対象（会社単位同期時は対象会社のみ）
     const retiredRecordIds = new Set<string>();
     for (const [recordId, doc] of existingByRecordId) {
       if (!syncedRecordIds.has(recordId)) {
         const data = doc.data()!;
-        // 受託先の従業員かチェック
+        // 同期対象の会社の従業員かチェック
         const empBranch = data.branchName || data.companyShortName || "";
-        if (!validShortNames.has(empBranch)) continue; // 非受託先はスキップ
+        if (!syncTargetNames.has(empBranch)) continue; // 対象外はスキップ
 
         retiredRecordIds.add(recordId);
         const existingEvents: string[] = data.events || [];
@@ -289,30 +313,34 @@ export async function POST() {
     }
 
     // 非受託先の monthlyPayroll レコードを削除（退社者は残す）
+    // 会社単位同期時は他社レコード誤削除防止のためスキップ
     let cleaned = 0;
-    let cleanBatch = adminDb.batch();
-    let cleanCount = 0;
-    for (const doc of existingSnapshot.docs) {
-      const data = doc.data();
-      const rid = data.kintoneRecordId;
-      if (!syncedRecordIds.has(rid) && !retiredRecordIds.has(rid)) {
-        cleanBatch.delete(doc.ref);
-        cleaned++;
-        cleanCount++;
-        if (cleanCount >= BATCH_LIMIT) {
-          await cleanBatch.commit();
-          cleanBatch = adminDb.batch();
-          cleanCount = 0;
+    if (!targetCompany) {
+      let cleanBatch = adminDb.batch();
+      let cleanCount = 0;
+      for (const doc of existingSnapshot.docs) {
+        const data = doc.data();
+        const rid = data.kintoneRecordId;
+        if (!syncedRecordIds.has(rid) && !retiredRecordIds.has(rid)) {
+          cleanBatch.delete(doc.ref);
+          cleaned++;
+          cleanCount++;
+          if (cleanCount >= BATCH_LIMIT) {
+            await cleanBatch.commit();
+            cleanBatch = adminDb.batch();
+            cleanCount = 0;
+          }
         }
       }
-    }
-    if (cleanCount > 0) {
-      await cleanBatch.commit();
+      if (cleanCount > 0) {
+        await cleanBatch.commit();
+      }
     }
 
     return NextResponse.json({
       success: true,
       month,
+      targetCompany,
       totalKintoneRecords: records.length,
       skipped,
       created,
