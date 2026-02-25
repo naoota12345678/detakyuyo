@@ -611,7 +611,7 @@ function CompanyPageContent() {
 
   // 従業員データを構築（parse-instruction用）
   const buildEmployeePayload = () => {
-    const activeEmps = employees.filter((e) => !isRetiredStatus(e.status));
+    const activeEmps = employees;
     const latestMonth = months.length > 0 ? months[months.length - 1] : "";
     return activeEmps.map((e) => {
       const data = latestMonth ? e.months[latestMonth] : undefined;

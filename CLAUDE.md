@@ -1,5 +1,17 @@
 # 給与管理ダッシュボード (payroll-app)
 
+## 最重要ルール
+
+### コード改変ルール
+- **絶対にプログラムを勝手に改変しない。必ずユーザーの許可を得てから修正すること。**
+- 問題を発見した場合: まず原因を説明 → 修正案を提示 → ユーザーの「はい」を待ってから実装
+- 場当たり的な修正禁止。深く考えてから提案すること
+
+### デプロイルール
+- `git push` はユーザーが「プッシュして」と指示した時のみ実行
+- Vercelへのデプロイ関連操作もユーザーの指示を待つ
+- 破壊的なgit操作（force push, reset --hard等）は絶対禁止
+
 ## プロジェクト概要
 社労士事務所向けの給与管理Webアプリ。kintoneの従業員・クライアントデータをFirestoreに同期し、月次給与台帳の管理、Excelデータとの突合チェック、Slack通知連携を行う。
 
@@ -49,6 +61,20 @@ getFirestore(app, "detakyuyo")
 - kintoneから `在籍状況="在籍" OR 退社日>=今日` で取得
 - `branchName` が companySettings の shortName に一致する従業員のみ同期
 - 退社日が過ぎた人は次回同期時に「退社」ステータスに変更
+- **会社単位同期**: `companyShortName` パラメータで特定会社のみ同期可能（会社ページの「従業員更新」ボタン）
+- 会社単位同期時: 退職検知は対象会社のみ、非受託先クリーンアップはスキップ（他社レコード保護）
+
+### 手動編集保護 (manuallyEditedFields)
+- `baseSalary`, `commutingAllowance`, `employmentType`, `branchName` をUIで手動編集すると `manuallyEditedFields.{field}` にタイムスタンプを記録
+- sync-employees 実行時、`manuallyEditedFields` に記録されたフィールドはkintoneデータで上書きしない
+- 月次コピー（generate/complete）時にはリセット（翌月はkintone同期を受け入れる）
+- force-sync（デバッグ用）は manuallyEditedFields を無視して上書き可能
+
+### 退職者ソフトデリート
+- 退社判定: `isRetired()` ヘルパー関数（`src/lib/employee-utils.ts`）で `"退社"` と `"退社（非表示）"` を統一判定
+- 退職者の「非表示にする」ボタン → `POST /api/payroll/hide-retired` → `status: "退社（非表示）"`
+- Firestoreにデータは残り、UIの一覧からは非表示になる
+- isRetired() 適用箇所: sync-employees, monthly/generate, monthly/complete, data-check/analyze, company/[id]/page.tsx
 
 ### フィールド保存パターン
 - 単一フィールド: `POST /api/payroll/update` → `{ docId, field, value }`
@@ -80,6 +106,8 @@ getFirestore(app, "detakyuyo")
 | `src/app/api/import/bulk/route.ts` | CSV一括インポート |
 | `src/app/api/ai/parse-instruction/route.ts` | テキスト指示AI（構造化変更） |
 | `src/app/api/ai/analyze-files/route.ts` | ファイル分析AI（Excel/PDF解析） |
+| `src/app/api/payroll/hide-retired/route.ts` | 退職者ソフトデリート |
+| `src/lib/employee-utils.ts` | 共通ヘルパー（isRetired等） |
 | `src/app/api/debug/force-sync/route.ts` | 手動従業員同期 |
 
 ## 環境変数（全20個、.env.local / Vercel）
@@ -94,7 +122,9 @@ Slack: `SLACK_BOT_TOKEN`, `SLACK_HIRE_CHANNEL_ID`, `SLACK_LEAVE_CHANNEL_ID`, `SL
 ### テキスト指示AI (`/api/ai/parse-instruction`)
 - 自然言語で給与変更指示 → 構造化JSON → 「反映する」ボタンで適用
 - 従業員名の部分一致、月範囲指定、金額変換に対応
+- FIELD_MAPは動的生成: 従業員データから実際の手当名（資格手当等）を取得してラベルに反映
 - 質問応答モード: 従業員の在籍・退社状況などを回答
+- max_tokens: 8192（大量変更に対応）
 - モデル: `claude-sonnet-4-5-20250929`
 
 ### ファイル分析AI (`/api/ai/analyze-files`)
@@ -108,11 +138,23 @@ Slack: `SLACK_BOT_TOKEN`, `SLACK_HIRE_CHANNEL_ID`, `SLACK_LEAVE_CHANNEL_ID`, `SL
 - モデル: `claude-sonnet-4-5-20250929`
 
 ### 更新可能フィールド（ALLOWED_FIELDS）
-`baseSalary`, `commutingAllowance`, `commutingUnitPrice`, `allowance1`〜`allowance6`, `deemedOvertimePay`, `deductions`, `residentTax`, `unitPrice`, `socialInsuranceGrade`, `overtimeHours`, `overtimePay`, `bonus`, `memo`, `employeeMemo`
+`baseSalary`, `commutingAllowance`, `commutingUnitPrice`, `allowance1`〜`allowance6`, `extraAllowance1`〜`extraAllowance3`, `extraDeduction1`〜`extraDeduction2`, `deemedOvertimePay`, `deductions`, `residentTax`, `unitPrice`, `socialInsuranceGrade`, `overtimeHours`, `overtimePay`, `bonus`, `memo`, `employeeMemo`, `employmentType`, `branchName`, `department`, `conversionDate`
 
-## 現在のステータス（2026-02-15）
+## 現在のステータス（2026-02-25）
 
-### 直近の作業完了（2026-02-15）
+### 直近の作業完了（2026-02-25）
+- 手動編集保護機能（manuallyEditedFields）: 同期時にアプリで修正したデータを上書きしない仕組み
+- 退職者ソフトデリート: 「非表示にする」ボタンでUI非表示、データベースには保持
+- isRetired()ヘルパー関数で退社判定を統一（5ファイル8箇所）
+- 会社単位の従業員同期: 会社ページから「従業員更新」ボタンで個別同期
+- GitHubにプッシュ済み（b0afa3e）
+
+### 以前の作業完了（2026-02-15）
+- 計算外手当（extraAllowance1-3）・控除項目（extraDeduction1-2）追加（全9ファイル）
+- 雇用形態セレクター追加（正社員/パート/契約社員等）
+- commutingUnitPrice翌月引き継ぎ修正
+- parse-instruction AI修正: 複数従業員対応、FIELD_MAP動的化（実際の手当名反映）
+- データチェックに計算外手当・控除項目追加
 - AI分析結果からデータ反映機能（````changes````ブロック → 「反映する」ボタン）
 - AI分析フォローアップ会話（多ターン対応）
 - Excel読み取り精度向上（CSV→セル単位→マークダウン→レコード形式）
