@@ -676,6 +676,7 @@ function CompanyPageContent() {
           employees: buildEmployeePayload(),
           months,
           companyName: company?.name || "",
+          companyShortName: company?.shortName || "",
           month: latestMonth,
         }),
       });

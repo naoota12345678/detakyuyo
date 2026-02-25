@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { fetchAllRecords, getFieldValue } from "@/lib/kintone";
+import { EMPLOYEE_FIELD_CODES } from "@/lib/kintone-mapping";
 
 const BASE_FIELD_MAP: Record<string, string> = {
   baseSalary: "基本給",
@@ -63,7 +65,7 @@ function buildFieldMap(employees: Record<string, any>[]): Record<string, string>
 
 export async function POST(request: NextRequest) {
   try {
-    const { instruction, employees, months, companyName, month } = await request.json();
+    const { instruction, employees, months, companyName, companyShortName, month } = await request.json();
 
     if (!instruction) {
       return NextResponse.json({ error: "指示を入力してください" }, { status: 400 });
@@ -74,12 +76,45 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "ANTHROPIC_API_KEY が設定されていません" }, { status: 500 });
     }
 
+    // kintoneから退職者情報を取得してemployeesに追加
+    const kintoneAppId = process.env.KINTONE_EMPLOYEE_APP_ID;
+    const kintoneToken = process.env.KINTONE_EMPLOYEE_API_TOKEN;
+    if (kintoneAppId && kintoneToken && companyShortName) {
+      try {
+        const retiredRecords = await fetchAllRecords(
+          kintoneAppId,
+          kintoneToken,
+          EMPLOYEE_FIELD_CODES,
+          `在籍状況 in ("退社") and ルックアップ = "${companyShortName}"`
+        );
+        const existingNames = new Set(employees.map((e: Record<string, string>) => e.name));
+        for (const record of retiredRecords) {
+          const name = getFieldValue(record, "氏名");
+          if (!existingNames.has(name)) {
+            employees.push({
+              name,
+              employeeNumber: getFieldValue(record, "従業員番号"),
+              status: "退社",
+              employmentType: getFieldValue(record, "ラジオボタン_2"),
+              branchName: getFieldValue(record, "ルックアップ"),
+              hireDate: getFieldValue(record, "入社日"),
+              leaveDate: getFieldValue(record, "退社日"),
+            });
+          }
+        }
+      } catch {
+        // kintone取得失敗時は無視して続行
+      }
+    }
+
     const client = new Anthropic({ apiKey });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const employeeList = employees
       .map((e: Record<string, any>) => {
         const parts = [`${e.name}（社員番号: ${e.employeeNumber}）`];
+        if (e.status && e.status !== "在籍") parts.push(`[${e.status}]`);
+        if (e.leaveDate) parts.push(`退社日: ${e.leaveDate}`);
         if (e.baseSalary) parts.push(`基本給${e.baseSalary}`);
         if (e.commutingAllowance) parts.push(`通勤手当${e.commutingAllowance}`);
         if (e.commutingUnitPrice) parts.push(`交通費単価${e.commutingUnitPrice}`);
@@ -123,7 +158,7 @@ export async function POST(request: NextRequest) {
 
 # 会社: ${companyName || "不明"} ／ 対象月: ${month || "不明"}
 
-## 対象従業員一覧（当月の給与データ含む）
+## 対象従業員一覧（在籍者の当月給与データ + 退職者情報を含む）
 ${employeeList}
 
 ## 利用可能月
@@ -144,7 +179,7 @@ ${fieldList}
 - employeeMemo の mode が "set" の場合は既存メモを完全に置き換える
 - memo（月メモ）も同様に "append" / "set" を使い分ける
 - 質問（「○○さんの基本給は？」「交通費単価いくら？」等）の場合は上記データから具体的な値を回答する
-- 質問（「○○さん辞めた？」「在籍してる？」等）の場合は従業員一覧から情報を探して回答する
+- 質問（「○○さん辞めた？」「在籍してる？」等）の場合は従業員一覧から情報を探して回答する。退職者も一覧に含まれている（[退社]マーク付き）
 - **「分からない」「アクセスできない」等の回答は禁止。データは上記に全て含まれています**
 
 ## 出力形式
