@@ -160,7 +160,7 @@ const ENTITY_TYPES = [
   "合名会社",
 ];
 
-function stripEntityType(name: string): string {
+export function stripEntityType(name: string): string {
   if (!name) return "";
   const trimmed = name.trim();
 

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { fetchAllRecords, getFieldValue } from "@/lib/kintone";
-import { EMPLOYEE_FIELD_CODES } from "@/lib/kintone-mapping";
+import { EMPLOYEE_FIELD_CODES, stripEntityType } from "@/lib/kintone-mapping";
 
 const BASE_FIELD_MAP: Record<string, string> = {
   baseSalary: "基本給",
@@ -85,18 +85,20 @@ export async function POST(request: NextRequest) {
           kintoneAppId,
           kintoneToken,
           EMPLOYEE_FIELD_CODES,
-          `在籍状況 in ("退社") and ルックアップ = "${companyShortName}"`
+          `在籍状況 in ("退職")`
         );
         const existingNames = new Set(employees.map((e: Record<string, string>) => e.name));
         for (const record of retiredRecords) {
+          const branchName = getFieldValue(record, "ルックアップ");
+          if (branchName !== companyShortName && stripEntityType(branchName) !== companyShortName) continue;
           const name = getFieldValue(record, "氏名");
           if (!existingNames.has(name)) {
             employees.push({
               name,
               employeeNumber: getFieldValue(record, "従業員番号"),
-              status: "退社",
+              status: "退職",
               employmentType: getFieldValue(record, "ラジオボタン_2"),
-              branchName: getFieldValue(record, "ルックアップ"),
+              branchName,
               hireDate: getFieldValue(record, "入社日"),
               leaveDate: getFieldValue(record, "退社日"),
             });

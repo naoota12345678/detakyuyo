@@ -5,6 +5,7 @@ import {
   mapKintoneToEmployee,
   EMPLOYEE_FIELD_CODES,
   EmployeeData,
+  stripEntityType,
 } from "@/lib/kintone-mapping";
 import { isRetired } from "@/lib/employee-utils";
 
@@ -168,7 +169,8 @@ export async function POST(request: NextRequest) {
         const emp = mapKintoneToEmployee(record);
 
         // 受託先フィルタ: branchName が同期対象に含まれない従業員はスキップ
-        if (!syncTargetNames.has(emp.branchName)) {
+        // 法人格付き（"株式会社 ムロランミート"）も法人格除去して再比較
+        if (!syncTargetNames.has(emp.branchName) && !syncTargetNames.has(stripEntityType(emp.branchName))) {
           skipped++;
           continue;
         }
@@ -290,7 +292,7 @@ export async function POST(request: NextRequest) {
         const data = doc.data()!;
         // 同期対象の会社の従業員かチェック
         const empBranch = data.branchName || data.companyShortName || "";
-        if (!syncTargetNames.has(empBranch)) continue; // 対象外はスキップ
+        if (!syncTargetNames.has(empBranch) && !syncTargetNames.has(stripEntityType(empBranch))) continue; // 対象外はスキップ
 
         retiredRecordIds.add(recordId);
         const existingEvents: string[] = data.events || [];
