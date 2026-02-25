@@ -4,8 +4,77 @@ import { isRetired } from "@/lib/employee-utils";
 
 function getNextMonth(monthStr: string): string {
   const [y, m] = monthStr.split("-").map(Number);
-  const d = new Date(y, m, 1); // m is already 1-based, so m = next month (0-based)
+  const d = new Date(y, m, 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function getPrevMonth(monthStr: string): string {
+  const [y, m] = monthStr.split("-").map(Number);
+  const d = new Date(y, m - 2, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildMonthRecord(prev: Record<string, any>, targetMonth: string, events: string[]) {
+  return {
+    month: targetMonth,
+    kintoneRecordId: prev.kintoneRecordId,
+    employeeNumber: prev.employeeNumber,
+    name: prev.name,
+    nameKana: prev.nameKana || "",
+    companyName: prev.companyName,
+    companyShortName: prev.companyShortName || "",
+    branchName: prev.branchName || "",
+    employmentType: prev.employmentType,
+    hireDate: prev.hireDate,
+    leaveDate: prev.leaveDate,
+    status: prev.status,
+    baseSalary: prev.baseSalary,
+    commutingAllowance: prev.commutingAllowance,
+    commutingType: prev.commutingType || "月額",
+    commutingUnitPrice: prev.commutingUnitPrice || 0,
+    overtimeHours: prev.overtimeHours || 0,
+    overtimePay: prev.overtimePay || 0,
+    otherAllowances: prev.otherAllowances || 0,
+    deductions: prev.deductions || 0,
+    totalPayment: prev.totalPayment || 0,
+    allowance1: prev.allowance1 || 0,
+    allowance1Name: prev.allowance1Name || "",
+    allowance2: prev.allowance2 || 0,
+    allowance2Name: prev.allowance2Name || "",
+    allowance3: prev.allowance3 || 0,
+    allowance3Name: prev.allowance3Name || "",
+    allowance4: prev.allowance4 || 0,
+    allowance4Name: prev.allowance4Name || "",
+    allowance5: prev.allowance5 || 0,
+    allowance5Name: prev.allowance5Name || "",
+    allowance6: prev.allowance6 || 0,
+    allowance6Name: prev.allowance6Name || "",
+    extraAllowance1: prev.extraAllowance1 || 0,
+    extraAllowance1Name: prev.extraAllowance1Name || "",
+    extraAllowance2: prev.extraAllowance2 || 0,
+    extraAllowance2Name: prev.extraAllowance2Name || "",
+    extraAllowance3: prev.extraAllowance3 || 0,
+    extraAllowance3Name: prev.extraAllowance3Name || "",
+    extraDeduction1: prev.extraDeduction1 || 0,
+    extraDeduction1Name: prev.extraDeduction1Name || "",
+    extraDeduction2: prev.extraDeduction2 || 0,
+    extraDeduction2Name: prev.extraDeduction2Name || "",
+    deemedOvertimePay: prev.deemedOvertimePay || 0,
+    residentTax: prev.residentTax || 0,
+    socialInsuranceGrade: prev.socialInsuranceGrade || "",
+    unitPrice: prev.unitPrice || 0,
+    bonus: 0,
+    socialInsurance: prev.socialInsurance,
+    employmentInsurance: prev.employmentInsurance,
+    healthStandardMonthly: prev.healthStandardMonthly || "",
+    pensionStandardMonthly: prev.pensionStandardMonthly || "",
+    memo: "",
+    employeeMemo: prev.employeeMemo || "",
+    confirmed: false,
+    events,
+    lastSyncedAt: new Date().toISOString(),
+  };
 }
 
 export async function POST(request: NextRequest) {
@@ -19,6 +88,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const prevMonth = getPrevMonth(currentMonth);
     const nextMonth = getNextMonth(currentMonth);
 
     // エイリアスを取得
@@ -34,32 +104,31 @@ export async function POST(request: NextRequest) {
       if (display === companyName) matchingNames.add(orig);
     }
 
-    // 当月レコード（この会社のみ）を取得
-    const currentSnapshot = await adminDb
-      .collection("monthlyPayroll")
-      .where("month", "==", currentMonth)
-      .get();
-
-    const companyDocs = currentSnapshot.docs.filter((doc) => {
+    const isCompanyMatch = (doc: FirebaseFirestore.QueryDocumentSnapshot) => {
       const data = doc.data();
       const rawName = data.companyShortName || data.companyName || "";
       const displayName = aliasMappings[rawName] || rawName;
       return matchingNames.has(rawName) || displayName === companyName;
+    };
+
+    // 前月・当月・翌月レコードを取得
+    const [prevSnapshot, currentSnapshot, nextSnapshot] = await Promise.all([
+      adminDb.collection("monthlyPayroll").where("month", "==", prevMonth).get(),
+      adminDb.collection("monthlyPayroll").where("month", "==", currentMonth).get(),
+      adminDb.collection("monthlyPayroll").where("month", "==", nextMonth).get(),
+    ]);
+
+    const prevCompanyDocs = prevSnapshot.docs.filter(isCompanyMatch);
+    const companyDocs = currentSnapshot.docs.filter(isCompanyMatch);
+
+    // 当月に既にいる社員のkintoneRecordId
+    const currentRecordIds = new Set<string>();
+    companyDocs.forEach((doc) => {
+      const rid = doc.data().kintoneRecordId;
+      if (rid) currentRecordIds.add(rid);
     });
 
-    if (companyDocs.length === 0) {
-      return NextResponse.json({
-        success: false,
-        message: `${currentMonth} の ${companyName} のレコードが見つかりません。`,
-      });
-    }
-
-    // 翌月に既にレコードがあるか確認（この会社のみ）
-    const nextSnapshot = await adminDb
-      .collection("monthlyPayroll")
-      .where("month", "==", nextMonth)
-      .get();
-
+    // 翌月に既にいる社員のkintoneRecordId
     const existingNextByRecordId = new Set<string>();
     nextSnapshot.docs.forEach((doc) => {
       const data = doc.data();
@@ -70,6 +139,7 @@ export async function POST(request: NextRequest) {
       }
     });
 
+    let backfilled = 0;
     let created = 0;
     let skipped = 0;
     const alerts: string[] = [];
@@ -78,13 +148,40 @@ export async function POST(request: NextRequest) {
     let batch = adminDb.batch();
     let batchCount = 0;
 
+    // === Phase 1: 前月→当月の欠落補完 ===
+    for (const doc of prevCompanyDocs) {
+      const prev = doc.data();
+      if (isRetired(prev.status)) continue;
+      if (prev.kintoneRecordId && currentRecordIds.has(prev.kintoneRecordId)) continue;
+
+      // 当月レコードを補完
+      const currentRef = adminDb.collection("monthlyPayroll").doc();
+      batch.set(currentRef, buildMonthRecord(prev, currentMonth, [`${prevMonth}から補完`]));
+      backfilled++;
+      batchCount++;
+
+      // 翌月レコードも同時に生成（なければ）
+      if (!prev.kintoneRecordId || !existingNextByRecordId.has(prev.kintoneRecordId)) {
+        const nextRef = adminDb.collection("monthlyPayroll").doc();
+        batch.set(nextRef, buildMonthRecord(prev, nextMonth, [`${prevMonth}から補完`]));
+        created++;
+        batchCount++;
+        if (prev.kintoneRecordId) existingNextByRecordId.add(prev.kintoneRecordId);
+      }
+
+      if (batchCount >= BATCH_LIMIT) {
+        await batch.commit();
+        batch = adminDb.batch();
+        batchCount = 0;
+      }
+    }
+
+    // === Phase 2: 当月→翌月生成（通常処理） ===
     for (const doc of companyDocs) {
       const prev = doc.data();
 
-      // 退社済み（非表示含む）はスキップ
       if (isRetired(prev.status)) continue;
 
-      // 既に翌月にレコードがある場合はスキップ
       if (prev.kintoneRecordId && existingNextByRecordId.has(prev.kintoneRecordId)) {
         skipped++;
         continue;
@@ -92,79 +189,18 @@ export async function POST(request: NextRequest) {
 
       const events: string[] = [];
 
-      // アラート: 前月の確認が未完了
       if (!prev.confirmed) {
         alerts.push(`${prev.name}: ${currentMonth}が未確認`);
         events.push(`注意: ${currentMonth}未確認`);
       }
 
-      // アラート: 退社日が翌月
       if (prev.leaveDate && prev.leaveDate.startsWith(nextMonth)) {
         alerts.push(`${prev.name}: 退社予定(${prev.leaveDate})`);
         events.push(`退社予定: ${prev.leaveDate} - 日割り計算要確認`);
       }
 
       const docRef = adminDb.collection("monthlyPayroll").doc();
-      batch.set(docRef, {
-        month: nextMonth,
-        kintoneRecordId: prev.kintoneRecordId,
-        employeeNumber: prev.employeeNumber,
-        name: prev.name,
-        nameKana: prev.nameKana || "",
-        companyName: prev.companyName,
-        companyShortName: prev.companyShortName || "",
-        branchName: prev.branchName || "",
-        employmentType: prev.employmentType,
-        hireDate: prev.hireDate,
-        leaveDate: prev.leaveDate,
-        status: prev.status,
-        baseSalary: prev.baseSalary,
-        commutingAllowance: prev.commutingAllowance,
-        commutingType: prev.commutingType || "月額",
-        commutingUnitPrice: prev.commutingUnitPrice || 0,
-        overtimeHours: prev.overtimeHours || 0,
-        overtimePay: prev.overtimePay || 0,
-        otherAllowances: prev.otherAllowances || 0,
-        deductions: prev.deductions || 0,
-        totalPayment: prev.totalPayment || 0,
-        allowance1: prev.allowance1 || 0,
-        allowance1Name: prev.allowance1Name || "",
-        allowance2: prev.allowance2 || 0,
-        allowance2Name: prev.allowance2Name || "",
-        allowance3: prev.allowance3 || 0,
-        allowance3Name: prev.allowance3Name || "",
-        allowance4: prev.allowance4 || 0,
-        allowance4Name: prev.allowance4Name || "",
-        allowance5: prev.allowance5 || 0,
-        allowance5Name: prev.allowance5Name || "",
-        allowance6: prev.allowance6 || 0,
-        allowance6Name: prev.allowance6Name || "",
-        extraAllowance1: prev.extraAllowance1 || 0,
-        extraAllowance1Name: prev.extraAllowance1Name || "",
-        extraAllowance2: prev.extraAllowance2 || 0,
-        extraAllowance2Name: prev.extraAllowance2Name || "",
-        extraAllowance3: prev.extraAllowance3 || 0,
-        extraAllowance3Name: prev.extraAllowance3Name || "",
-        extraDeduction1: prev.extraDeduction1 || 0,
-        extraDeduction1Name: prev.extraDeduction1Name || "",
-        extraDeduction2: prev.extraDeduction2 || 0,
-        extraDeduction2Name: prev.extraDeduction2Name || "",
-        deemedOvertimePay: prev.deemedOvertimePay || 0,
-        residentTax: prev.residentTax || 0,
-        socialInsuranceGrade: prev.socialInsuranceGrade || "",
-        unitPrice: prev.unitPrice || 0,
-        bonus: 0, // 賞与は翌月に引き継がない
-        socialInsurance: prev.socialInsurance,
-        employmentInsurance: prev.employmentInsurance,
-        healthStandardMonthly: prev.healthStandardMonthly || "",
-        pensionStandardMonthly: prev.pensionStandardMonthly || "",
-        // 月メモは引き継がない、人メモは引き継ぐ
-        memo: "",
-        employeeMemo: prev.employeeMemo || "",
-        confirmed: false,
-        events,
-        lastSyncedAt: new Date().toISOString(),
-      });
+      batch.set(docRef, buildMonthRecord(prev, nextMonth, events));
 
       created++;
       batchCount++;
@@ -186,6 +222,7 @@ export async function POST(request: NextRequest) {
       currentMonth,
       nextMonth,
       sourceRecords: companyDocs.length,
+      backfilled,
       created,
       skipped,
       alerts,

@@ -875,6 +875,7 @@ function CompanyPageContent() {
       const result = await res.json();
       if (result.success) {
         const msg = [`${result.nextMonth} を生成しました（${result.created}名）`];
+        if (result.backfilled > 0) msg.push(`当月補完: ${result.backfilled}名`);
         if (result.skipped > 0) msg.push(`既存スキップ: ${result.skipped}名`);
         if (result.alerts?.length > 0) msg.push(`\nアラート:\n${result.alerts.join("\n")}`);
         alert(msg.join("\n"));
