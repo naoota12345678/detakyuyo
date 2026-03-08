@@ -60,7 +60,9 @@ getFirestore(app, "detakyuyo")
 ### 従業員同期 (sync-employees)
 - kintoneから `在籍状況="在籍" OR 退社日>=今日` で取得
 - `branchName` が companySettings の shortName に一致する従業員のみ同期
+- **branchName比較**: 完全一致 + `stripEntityType()`で法人格除去後の再比較（kintoneのルックアップ値に法人格付き/なしが混在するため）
 - 退社日が過ぎた人は次回同期時に「退社」ステータスに変更
+- **kintone在籍状況の値は「退職」**（アプリ内のstatusは「退社」「退社（非表示）」）
 - **会社単位同期**: `companyShortName` パラメータで特定会社のみ同期可能（会社ページの「従業員更新」ボタン）
 - 会社単位同期時: 退職検知は対象会社のみ、非受託先クリーンアップはスキップ（他社レコード保護）
 
@@ -75,6 +77,12 @@ getFirestore(app, "detakyuyo")
 - 退職者の「非表示にする」ボタン → `POST /api/payroll/hide-retired` → `status: "退社（非表示）"`
 - Firestoreにデータは残り、UIの一覧からは非表示になる
 - isRetired() 適用箇所: sync-employees, monthly/generate, monthly/complete, data-check/analyze, company/[id]/page.tsx
+
+### 月次生成 (monthly/complete)
+- 当月完了→翌月レコード生成
+- **欠落補完機能**: 前月にいるが当月に欠けている社員を自動検知し、当月+翌月レコードを同時生成
+- 既存レコードの上書きなし（安全に再実行可能）
+- `buildMonthRecord()` ヘルパーでレコード構築を共通化
 
 ### フィールド保存パターン
 - 単一フィールド: `POST /api/payroll/update` → `{ docId, field, value }`
@@ -124,6 +132,8 @@ Slack: `SLACK_BOT_TOKEN`, `SLACK_HIRE_CHANNEL_ID`, `SLACK_LEAVE_CHANNEL_ID`, `SL
 - 従業員名の部分一致、月範囲指定、金額変換に対応
 - FIELD_MAPは動的生成: 従業員データから実際の手当名（資格手当等）を取得してラベルに反映
 - 質問応答モード: 従業員の在籍・退社状況などを回答
+- **kintoneから退職者情報も取得してAIに渡す**（在籍状況="退職"でクエリ、branchNameでフィルタ）
+- 従業員リストにステータスと退社日を表示（[退職]マーク付き）
 - max_tokens: 8192（大量変更に対応）
 - モデル: `claude-sonnet-4-5-20250929`
 
@@ -143,11 +153,15 @@ Slack: `SLACK_BOT_TOKEN`, `SLACK_HIRE_CHANNEL_ID`, `SLACK_LEAVE_CHANNEL_ID`, `SL
 ## 現在のステータス（2026-02-25）
 
 ### 直近の作業完了（2026-02-25）
+- AIが退職者を認識: kintoneから退職者情報を取得してparse-instructionに渡す
+- kintone在籍状況「退職」（「退社」ではない）に修正
+- 法人格付きbranchNameの同期漏れ解消: stripEntityType()で正規化比較（sync-employees, parse-instruction）
+- 月次生成の欠落社員自動補完: 前月→当月の欠落を検知し当月+翌月レコード同時生成
 - 手動編集保護機能（manuallyEditedFields）: 同期時にアプリで修正したデータを上書きしない仕組み
 - 退職者ソフトデリート: 「非表示にする」ボタンでUI非表示、データベースには保持
 - isRetired()ヘルパー関数で退社判定を統一（5ファイル8箇所）
 - 会社単位の従業員同期: 会社ページから「従業員更新」ボタンで個別同期
-- GitHubにプッシュ済み（b0afa3e）
+- GitHubにプッシュ済み（bd1d34d）
 
 ### 以前の作業完了（2026-02-15）
 - 計算外手当（extraAllowance1-3）・控除項目（extraDeduction1-2）追加（全9ファイル）
