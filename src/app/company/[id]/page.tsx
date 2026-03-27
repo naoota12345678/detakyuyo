@@ -221,6 +221,7 @@ function CompanyPageContent() {
   const [payslipSettingsOpen, setPayslipSettingsOpen] = useState(false);
   const [payslipSaving, setPayslipSaving] = useState(false);
   const [csvConverting, setCsvConverting] = useState(false);
+  const [payslipSaved, setPayslipSaved] = useState(false);
 
   useEffect(() => {
     if (!loading && !user) router.push("/login");
@@ -1288,7 +1289,15 @@ function CompanyPageContent() {
                   className="shrink-0 rounded-md border border-orange-300 bg-orange-50 px-3 py-1.5 text-sm font-medium text-orange-700 hover:bg-orange-100 inline-flex items-center gap-1"
                   title="給与明細システムにログイン"
                 >
-                  &#128196; 給与明細
+                  &#128196; 給与明細{payslipEmail ? "" : "（未設定）"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPayslipSettingsOpen(!payslipSettingsOpen)}
+                  className={`shrink-0 rounded-md border px-1.5 py-1.5 text-sm ${payslipSettingsOpen ? "border-orange-400 bg-orange-100 text-orange-700" : "border-zinc-300 bg-white text-zinc-500 hover:bg-zinc-50"}`}
+                  title="給与明細システム ログイン設定"
+                >
+                  &#9881;
                 </button>
                 <button
                   onClick={handleAiInstruction}
@@ -1350,13 +1359,20 @@ function CompanyPageContent() {
                       />
                     </div>
                     <button
-                      onClick={savePayslipCredentials}
+                      onClick={async () => {
+                        await savePayslipCredentials();
+                        setPayslipSaved(true);
+                        setTimeout(() => setPayslipSaved(false), 2000);
+                      }}
                       disabled={payslipSaving || !payslipEmail || !payslipPassword}
                       className="shrink-0 rounded bg-orange-500 px-3 py-1 text-xs font-medium text-white hover:bg-orange-600 disabled:opacity-50"
                     >
                       {payslipSaving ? "保存中..." : "保存"}
                     </button>
                   </div>
+                  {payslipSaved && (
+                    <p className="mt-1.5 text-[11px] text-green-600 font-medium">保存しました。次回から「給与明細」ボタンで自動ログインできます。</p>
+                  )}
                 </div>
               )}
 
