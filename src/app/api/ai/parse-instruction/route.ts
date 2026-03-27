@@ -116,6 +116,7 @@ export async function POST(request: NextRequest) {
       .map((e: Record<string, any>) => {
         const parts = [`${e.name}（社員番号: ${e.employeeNumber}）`];
         if (e.status && e.status !== "在籍") parts.push(`[${e.status}]`);
+        if (e.hireDate) parts.push(`入社日: ${e.hireDate}`);
         if (e.leaveDate) parts.push(`退社日: ${e.leaveDate}`);
         if (e.baseSalary) parts.push(`基本給${e.baseSalary}`);
         if (e.commutingAllowance) parts.push(`通勤手当${e.commutingAllowance}`);

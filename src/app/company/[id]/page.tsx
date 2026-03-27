@@ -53,6 +53,7 @@ type MonthlyData = {
   extraDeduction1Name: string;
   extraDeduction2: number;
   extraDeduction2Name: string;
+  leaveDate: string;
 };
 
 type EmployeeRow = {
@@ -214,6 +215,12 @@ function CompanyPageContent() {
   const [mappingSaving, setMappingSaving] = useState(false);
   // 会社レベル手当名
   const [allowanceNames, setAllowanceNames] = useState<Record<string, string>>({});
+  // 給与明細システム連携
+  const [payslipEmail, setPayslipEmail] = useState("");
+  const [payslipPassword, setPayslipPassword] = useState("");
+  const [payslipSettingsOpen, setPayslipSettingsOpen] = useState(false);
+  const [payslipSaving, setPayslipSaving] = useState(false);
+  const [csvConverting, setCsvConverting] = useState(false);
 
   useEffect(() => {
     if (!loading && !user) router.push("/login");
@@ -267,6 +274,8 @@ function CompanyPageContent() {
           if (data.allowanceNames) {
             setAllowanceNames(data.allowanceNames);
           }
+          if (data.payslipEmail) setPayslipEmail(data.payslipEmail);
+          if (data.payslipPassword) setPayslipPassword(data.payslipPassword);
         }
       });
       setCompany({ name: companyName, shortName: foundShortName, closingDay, payDay, standardWorkingHours });
@@ -348,6 +357,7 @@ function CompanyPageContent() {
           extraDeduction1Name: data.extraDeduction1Name || "控除1",
           extraDeduction2: data.extraDeduction2 || 0,
           extraDeduction2Name: data.extraDeduction2Name || "控除2",
+          leaveDate: data.leaveDate || "",
         };
       });
 
@@ -621,6 +631,8 @@ function CompanyPageContent() {
         status: e.status,
         employmentType: e.employmentType,
         branchName: e.branchName,
+        hireDate: e.hireDate || "",
+        leaveDate: data?.leaveDate || "",
         ...(data ? {
           baseSalary: data.baseSalary || 0,
           commutingAllowance: data.commutingAllowance || 0,
@@ -649,6 +661,105 @@ function CompanyPageContent() {
         } : {}),
       };
     });
+  };
+
+  // CSV変換（Excel → スマ給用CSV）
+  const handleCsvConvert = async () => {
+    const xlsxFiles = aiFiles.filter((f) => /\.(xlsx|xls)$/i.test(f.name));
+    if (xlsxFiles.length === 0) { alert("Excelファイルを添付してください"); return; }
+    setCsvConverting(true);
+    try {
+      const XLSX = await import("xlsx");
+      for (const file of xlsxFiles) {
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        // header:1 でヘッダー行含む生データ取得（Pythonのheader=2相当: 3行目がヘッダー）
+        const raw: (string | number | null | undefined)[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
+        // 3行目（index=2）がヘッダー行
+        if (raw.length < 4) { alert(`${file.name}: データが不足しています`); continue; }
+        const headers = (raw[2] || []).map((h) => String(h ?? "").trim());
+        // Pythonと同じ列を抽出（index_col=3 → KY03がインデックス）
+        const KY_COLUMNS = [
+          "KY03","KY02","KY01",
+          "KY11_0","KY11_1","KY11_2","KY11_3","KY11_4","KY11_5","KY11_6","KY11_7","KY11_8",
+          "KY11_9","KY11_10","KY11_11","KY11_12","KY11_13","KY11_14","KY11_15","KY11_16","KY11_17",
+          "KY12_0","KY12_1","KY12_2","KY12_3","KY12_4","KY12_5","KY12_6","KY12_7","KY12_8",
+          "KY12_9","KY12_10","KY12_11","KY12_12","KY12_13","KY12_14","KY12_15","KY12_16","KY12_17",
+          "KY12_18","KY12_19","KY12_20","KY12_21","KY12_22","KY12_23",
+          "KY21_0","KY21_1","KY21_2","KY21_3","KY21_4","KY21_5","KY21_6","KY21_7","KY21_8",
+          "KY21_9","KY21_10","KY21_11","KY21_12","KY21_13","KY21_14","KY21_15","KY21_16","KY21_17",
+          "KY21_18","KY21_19","KY21_20","KY21_21","KY21_22","KY21_23","KY21_24","KY21_25","KY21_26","KY21_27",
+          "KY22_0","KY22_1","KY22_2","KY22_3","KY22_4","KY22_5","KY22_6","KY22_7","KY22_8",
+          "KY22_9","KY22_10","KY22_11","KY22_12","KY22_13","KY22_14","KY22_15","KY22_16","KY22_17",
+          "KY22_18","KY22_19","KY22_20","KY22_21","KY22_22","KY22_23","KY22_24","KY22_25","KY22_26",
+          "KY22_27","KY22_28","KY22_29","KY22_30",
+          "KY23_0","KY23_1","KY23_2","KY23_3","KY23_4","KY23_5","KY23_6","KY23_7","KY23_8",
+          "KY31_0","KY31_1","KY32","KY33","KY36","KY37","KY38","KY35",
+        ];
+        // ヘッダーから列インデックスを取得
+        const colIndices = KY_COLUMNS.map((col) => headers.indexOf(col));
+        // CSVデータ構築
+        const csvRows: string[] = [];
+        csvRows.push(KY_COLUMNS.join(","));
+        for (let i = 3; i < raw.length; i++) {
+          const row = raw[i];
+          if (!row || row.length === 0) continue;
+          const values = colIndices.map((ci) => {
+            if (ci === -1) return "";
+            const v = row[ci];
+            if (v == null) return "";
+            // Pythonと同じ: .0 を除去
+            const s = String(v);
+            return s.endsWith(".0") ? s.slice(0, -2) : s;
+          });
+          // 空行スキップ（KY03が空）
+          if (!values[0] && !values[1]) continue;
+          csvRows.push(values.join(","));
+        }
+        // ダウンロード
+        const blob = new Blob([csvRows.join("\n")], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        const now = new Date();
+        const ts = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}${String(now.getDate()).padStart(2,"0")}_${String(now.getHours()).padStart(2,"0")}${String(now.getMinutes()).padStart(2,"0")}${String(now.getSeconds()).padStart(2,"0")}`;
+        a.download = `log_${ts}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch (err) {
+      alert("CSV変換エラー: " + (err instanceof Error ? err.message : "不明なエラー"));
+    } finally {
+      setCsvConverting(false);
+    }
+  };
+
+  // 給与明細システムの認証情報を保存
+  const savePayslipCredentials = async () => {
+    if (!companySettingsDocId) { alert("会社設定が見つかりません"); return; }
+    setPayslipSaving(true);
+    try {
+      await updateDoc(doc(db, "companySettings", companySettingsDocId), {
+        payslipEmail,
+        payslipPassword,
+      });
+      setPayslipSettingsOpen(false);
+    } catch (err) {
+      alert("保存エラー: " + (err instanceof Error ? err.message : "不明なエラー"));
+    } finally {
+      setPayslipSaving(false);
+    }
+  };
+
+  // 給与明細システムを開く（自動ログイン）
+  const openPayslipSystem = () => {
+    if (!payslipEmail || !payslipPassword) {
+      setPayslipSettingsOpen(true);
+      return;
+    }
+    const hash = `#email=${encodeURIComponent(payslipEmail)}&password=${encodeURIComponent(payslipPassword)}`;
+    window.open(`https://kyuyoprint.web.app/admin${hash}`, "_blank");
   };
 
   // AI指示を送信
@@ -1137,6 +1248,24 @@ function CompanyPageContent() {
                 >
                   &#128206; {aiFiles.length > 0 ? `${aiFiles.length}件添付中` : "資料を添付"}
                 </button>
+                {aiFiles.some((f) => /\.(xlsx|xls)$/i.test(f.name)) && (
+                  <button
+                    type="button"
+                    onClick={handleCsvConvert}
+                    disabled={csvConverting}
+                    className="shrink-0 rounded-md border border-green-400 bg-green-50 px-3 py-1.5 text-sm font-medium text-green-700 hover:bg-green-100 disabled:opacity-50"
+                  >
+                    {csvConverting ? "変換中..." : "CSV変換"}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={openPayslipSystem}
+                  className="shrink-0 rounded-md border border-orange-300 bg-orange-50 px-3 py-1.5 text-sm font-medium text-orange-700 hover:bg-orange-100 inline-flex items-center gap-1"
+                  title="給与明細システムにログイン"
+                >
+                  &#128196; 給与明細
+                </button>
                 <button
                   onClick={handleAiInstruction}
                   disabled={aiLoading || !aiInstruction.trim()}
@@ -1165,6 +1294,45 @@ function CompanyPageContent() {
                   >
                     全削除
                   </button>
+                </div>
+              )}
+
+              {/* 給与明細システム認証設定 */}
+              {payslipSettingsOpen && (
+                <div className="mt-2 rounded-md border border-orange-200 bg-orange-50/50 p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-orange-700">給与明細システム ログイン設定</span>
+                    <button onClick={() => setPayslipSettingsOpen(false)} className="text-orange-400 hover:text-orange-600 text-xs">閉じる</button>
+                  </div>
+                  <div className="flex gap-2 items-end">
+                    <div className="flex-1">
+                      <label className="block text-[10px] text-orange-600 mb-0.5">メールアドレス</label>
+                      <input
+                        type="email"
+                        value={payslipEmail}
+                        onChange={(e) => setPayslipEmail(e.target.value)}
+                        className="w-full rounded border border-orange-200 bg-white px-2 py-1 text-xs text-zinc-800 focus:border-orange-400 focus:outline-none"
+                        placeholder="admin@company.com"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <label className="block text-[10px] text-orange-600 mb-0.5">パスワード</label>
+                      <input
+                        type="password"
+                        value={payslipPassword}
+                        onChange={(e) => setPayslipPassword(e.target.value)}
+                        className="w-full rounded border border-orange-200 bg-white px-2 py-1 text-xs text-zinc-800 focus:border-orange-400 focus:outline-none"
+                        placeholder="••••••••"
+                      />
+                    </div>
+                    <button
+                      onClick={savePayslipCredentials}
+                      disabled={payslipSaving || !payslipEmail || !payslipPassword}
+                      className="shrink-0 rounded bg-orange-500 px-3 py-1 text-xs font-medium text-white hover:bg-orange-600 disabled:opacity-50"
+                    >
+                      {payslipSaving ? "保存中..." : "保存"}
+                    </button>
+                  </div>
                 </div>
               )}
 
