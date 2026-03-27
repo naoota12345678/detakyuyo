@@ -679,7 +679,9 @@ function CompanyPageContent() {
         // 3行目（index=2）がヘッダー行
         if (raw.length < 4) { alert(`${file.name}: データが不足しています`); continue; }
         const headers = (raw[2] || []).map((h) => String(h ?? "").trim());
-        // Pythonと同じ列を抽出（index_col=3 → KY03がインデックス）
+        // ヘッダー先頭でSY01なら賞与、KY01なら給与を自動判定
+        const isBonus = headers[0] === "SY01";
+        // 給与用カラムリスト
         const KY_COLUMNS = [
           "KY03","KY02","KY01",
           "KY11_0","KY11_1","KY11_2","KY11_3","KY11_4","KY11_5","KY11_6","KY11_7","KY11_8",
@@ -697,11 +699,27 @@ function CompanyPageContent() {
           "KY23_0","KY23_1","KY23_2","KY23_3","KY23_4","KY23_5","KY23_6","KY23_7","KY23_8",
           "KY31_0","KY31_1","KY32","KY33","KY36","KY37","KY38","KY35",
         ];
+        // 賞与用カラムリスト
+        const SY_COLUMNS = [
+          "KY03","SY01","KY02",
+          "SY11_0","SY11_1",
+          "SY21_2","SY21_3","SY21_4","SY21_5","SY21_6","SY21_7","SY21_8",
+          "SY21_9","SY21_10","SY21_11","SY21_12","SY21_13","SY21_14","SY21_15","SY21_16","SY21_17",
+          "SY21_18","SY21_19","SY21_20","SY21_21","SY21_22","SY21_23","SY21_24","SY21_25","SY21_26","SY21_27",
+          "SY22_0","SY22_1","SY22_2","SY22_3","SY22_4","SY22_5","SY22_6","SY22_7","SY22_8",
+          "SY22_9","SY22_10","SY22_11","SY22_12","SY22_13","SY22_14","SY22_15","SY22_16","SY22_17",
+          "SY22_18","SY22_19","SY22_20","SY22_21","SY22_22","SY22_23","SY22_24","SY22_25","SY22_26",
+          "SY22_27","SY22_28","SY22_29","SY22_30",
+          "SY23_0","SY23_1","SY23_2","SY23_3","SY23_4","SY23_5","SY23_6","SY23_7","SY23_8",
+          "SY31_0","SY31_1","SY31_2","SY32","SY34","SY35","SY36","SY37","SY38",
+          "SY21_0","SY21_1",
+        ];
+        const COLUMNS = isBonus ? SY_COLUMNS : KY_COLUMNS;
         // ヘッダーから列インデックスを取得
-        const colIndices = KY_COLUMNS.map((col) => headers.indexOf(col));
+        const colIndices = COLUMNS.map((col) => headers.indexOf(col));
         // CSVデータ構築
         const csvRows: string[] = [];
-        csvRows.push(KY_COLUMNS.join(","));
+        csvRows.push(COLUMNS.join(","));
         for (let i = 3; i < raw.length; i++) {
           const row = raw[i];
           if (!row || row.length === 0) continue;
