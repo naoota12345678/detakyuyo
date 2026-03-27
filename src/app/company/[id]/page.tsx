@@ -705,10 +705,16 @@ function CompanyPageContent() {
         for (let i = 3; i < raw.length; i++) {
           const row = raw[i];
           if (!row || row.length === 0) continue;
-          const values = colIndices.map((ci) => {
+          const ky03Idx = colIndices[0]; // KY03は先頭
+          const values = colIndices.map((ci, colIdx) => {
             if (ci === -1) return "";
             const v = row[ci];
             if (v == null) return "";
+            // KY03: Pythonのindex_col変換と同じく数値化（先頭ゼロ除去）
+            if (colIdx === 0 && ci === ky03Idx) {
+              const num = Number(v);
+              if (!isNaN(num)) return String(num);
+            }
             // Pythonと同じ: .0 を除去
             const s = String(v);
             return s.endsWith(".0") ? s.slice(0, -2) : s;
