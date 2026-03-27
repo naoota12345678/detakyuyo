@@ -136,10 +136,20 @@ export async function POST(request: NextRequest) {
       `在籍状況 in ("在籍") or 退社日 >= "${today}"`
     );
 
-    // 既存の当月レコードを取得
+    // 翌月を算出
+    const [curY, curM] = month.split("-").map(Number);
+    const nextDate = new Date(curY, curM, 1); // curM is 0-indexed+1 so this gives next month
+    const nextMonth = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, "0")}`;
+
+    // 既存の当月・翌月レコードを取得
     const existingSnapshot = await adminDb
       .collection("monthlyPayroll")
       .where("month", "==", month)
+      .get();
+
+    const nextMonthSnapshot = await adminDb
+      .collection("monthlyPayroll")
+      .where("month", "==", nextMonth)
       .get();
 
     const existingByRecordId = new Map<string, FirebaseFirestore.DocumentSnapshot>();
@@ -147,6 +157,16 @@ export async function POST(request: NextRequest) {
       const data = doc.data();
       if (data.kintoneRecordId) {
         existingByRecordId.set(data.kintoneRecordId, doc);
+      }
+    });
+
+    // 翌月レコードが既に存在するか（他社員で生成済みか）
+    const nextMonthExists = nextMonthSnapshot.docs.length > 0;
+    const nextMonthByRecordId = new Set<string>();
+    nextMonthSnapshot.docs.forEach((doc) => {
+      const data = doc.data();
+      if (data.kintoneRecordId) {
+        nextMonthByRecordId.add(data.kintoneRecordId);
       }
     });
 
@@ -199,6 +219,15 @@ export async function POST(request: NextRequest) {
           });
           updated++;
           batchCount++;
+        }
+
+        // 翌月レコード補完: 他社員の翌月分が既にあるのにこの社員の翌月分がない場合
+        if (nextMonthExists && !nextMonthByRecordId.has(emp.kintoneRecordId) && !isRetired(emp.status)) {
+          const nextDocRef = adminDb.collection("monthlyPayroll").doc();
+          batch.set(nextDocRef, buildPayrollDoc(emp, nextMonth));
+          nextMonthByRecordId.add(emp.kintoneRecordId); // 重複防止
+          batchCount++;
+          events.push(`${emp.name}: 翌月(${nextMonth})レコード補完`);
         }
 
         if (batchCount >= BATCH_LIMIT) {
